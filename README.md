@@ -61,7 +61,7 @@ dataclaw start
 **Docker Compose** - multi-container deployment with a dedicated Chroma service and separate worker:
 
 ```bash
-git clone https://github.com/saivangapally81/dataclaw.git
+git clone https://github.com/svangapally81/dataclaw.git
 cd dataclaw
 cp .env.example .env
 
@@ -78,7 +78,7 @@ UI at `http://localhost:8000`. Stop with `docker compose down`.
 **From source** (contributors only):
 
 ```bash
-git clone https://github.com/saivangapally81/dataclaw.git
+git clone https://github.com/svangapally81/dataclaw.git
 cd dataclaw
 make install         # backend (uv sync) + frontend (npm ci)
 make dev             # starts backend + frontend (Vite :5173) + worker + ChromaDB

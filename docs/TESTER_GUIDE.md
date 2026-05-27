@@ -2,7 +2,7 @@
 
 Manual testing before public release. Two stages. **Don't start stage 2 until stage 1 is green.**
 
-Repo: `https://github.com/saivangapally81/dataclaw` (branch: `main`)
+Repo: `https://github.com/svangapally81/dataclaw` (branch: `main`)
 
 You'll need: your own OpenAI API key, plus credentials for the SaaS connectors you want to try.
 
@@ -19,7 +19,7 @@ Goal: prove every documented connector and chat flow actually works when used th
 You'll need: **Docker Desktop** running (the local container fixtures require it), `uv` for Python deps (`brew install uv`), Node 22+, and Python 3.12+.
 
 ```bash
-git clone https://github.com/saivangapally81/dataclaw.git
+git clone https://github.com/svangapally81/dataclaw.git
 cd dataclaw
 make quickstart                 # installs deps + bundles UI + dataclaw init + dataclaw start
 ```
@@ -125,7 +125,7 @@ Repeat **scenarios 1, 2, 5** from Stage 1 with the same connectors.
 ### Path B - Docker Compose
 
 ```bash
-git clone https://github.com/saivangapally81/dataclaw.git
+git clone https://github.com/svangapally81/dataclaw.git
 cd dataclaw
 cp .env.example .env
 # Edit .env per docs (MASTER_KEY, SESSION_SECRET, etc.)
@@ -137,7 +137,7 @@ Open `http://localhost:8000`. Repeat **scenarios 1, 2, 5**.
 ### Path C - From source
 
 ```bash
-git clone https://github.com/saivangapally81/dataclaw.git
+git clone https://github.com/svangapally81/dataclaw.git
 cd dataclaw
 make quickstart
 ```
