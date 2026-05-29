@@ -50,7 +50,7 @@ async def app_client(tmp_path_factory):
 async def test_mcp_sqlite_tools_are_grant_gated_and_audited(app_client: AsyncClient) -> None:
     ac = app_client
     assert (await ac.post("/connectors/sqlite/test", json={"credentials": {}})).status_code == 200
-    assert (await ac.post("/connectors/sqlite/sync")).status_code == 200
+    assert (await ac.post("/connectors/sqlite/sync?wait=true")).status_code == 200
 
     agents = (await ac.get("/agents")).json()
     chat_agent = next(agent for agent in agents if agent["name"] == "chat")

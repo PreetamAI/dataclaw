@@ -3566,7 +3566,13 @@ async def answer_question(
                 "Notion database. For lineage, dependency, ownership, and pipeline "
                 "questions, prefer graph_edges and wiki_pages unless the user asks for "
                 "raw records or numeric aggregation; summarize the relevant upstream, "
-                "downstream, pipeline, and model names present in graph_edges."
+                "downstream, pipeline, and model names present in graph_edges. "
+                "Connector routing: when more than one connector is granted, pick the "
+                "tool whose connector slug owns the referenced table in schemas / "
+                "retrieval_trace (e.g. if `customers` only appears under the sqlite "
+                "source, call sqlite_read_query_select, not the postgres equivalent). "
+                "Never assume a table exists on a connector that did not surface it "
+                "in the retrieval trace."
             ),
         },
         {

@@ -25,18 +25,22 @@ async def auto_sync_all_connectors(session: AsyncSession) -> AgentRun:
     if workspace is None:
         raise RuntimeError("Workspace has not been seeded.")
     workspace_id = workspace.id
-    connectors = list(
-        (
+
+    # Snapshot only the primitive identifiers we need. ORM instances loaded
+    # here would be expired/detached after the first rollback inside the loop
+    # (rollback expires regardless of expire_on_commit=False), and accessing
+    # any attribute on them then raises DetachedInstanceError.
+    connector_keys: list[tuple[str, str]] = [
+        (row.id, row.slug)
+        for row in (
             await session.scalars(
                 select(Connector).where(Connector.credential_state == "configured")
             )
         ).all()
-    )
+    ]
     timeline: list[dict] = []
     status = "completed"
-    for connector in connectors:
-        connector_id = connector.id
-        connector_slug = connector.slug
+    for connector_id, connector_slug in connector_keys:
         connector_started_at = datetime.now(UTC)
         try:
             claimed = await session.execute(
@@ -48,7 +52,10 @@ async def auto_sync_all_connectors(session: AsyncSession) -> AgentRun:
                 timeline.append({"slug": connector_slug, "status": "skipped", "detail": "sync already running"})
                 continue
             await session.commit()
-            await session.refresh(connector)
+            connector = await session.get(Connector, connector_id)
+            if connector is None:
+                timeline.append({"slug": connector_slug, "status": "skipped", "detail": "connector deleted mid-run"})
+                continue
             credentials = {}
             if connector.encrypted_credentials:
                 credentials = decrypt_json(settings.master_key, connector.encrypted_credentials)
@@ -59,6 +66,7 @@ async def auto_sync_all_connectors(session: AsyncSession) -> AgentRun:
             connector.sync_summary = result
             connector.sync_state = "synced"
             connector.last_synced_at = datetime.now(UTC)
+            await session.commit()
             timeline.append(
                 {
                     "slug": connector_slug,

@@ -21,6 +21,12 @@ from app.services.connectors.adapters import (
 )
 
 
+def _underlying(adapter):
+    # adapter_for() wraps every adapter in _RetryingAdapter; tests check the
+    # concrete implementation behind the wrapper.
+    return getattr(adapter, "_inner", adapter)
+
+
 @pytest.mark.parametrize(
     "slug, expected",
     [
@@ -33,7 +39,7 @@ from app.services.connectors.adapters import (
     ],
 )
 def test_factory_returns_real_adapter(slug: str, expected: type) -> None:
-    adapter = adapter_for(slug)
+    adapter = _underlying(adapter_for(slug))
     assert isinstance(adapter, expected), f"{slug} resolved to {type(adapter).__name__}"
     assert not isinstance(adapter, CredentialRequiredAdapter)
 
@@ -43,7 +49,7 @@ def test_no_catalog_slug_falls_through_to_credential_required() -> None:
 
     fallthroughs: list[str] = []
     for slug in CATALOG_BY_SLUG:
-        adapter = adapter_for(slug)
+        adapter = _underlying(adapter_for(slug))
         if isinstance(adapter, CredentialRequiredAdapter) and slug not in {"quip", "confluence", "fivetran"}:
             fallthroughs.append(slug)
     assert fallthroughs == [], f"Catalog entries with no real adapter: {fallthroughs}"

@@ -380,18 +380,15 @@ _STABILITY: dict[str, tuple[Stability, list[str], str]] = {
                    ], "Live Fivetran list connectors and sync-history reads passed; trigger-sync returned pending approval and was not executed."),
 
     # 🟡 beta - adapter wired; fixture-backed E2E only; live SaaS E2E pending
-    "airflow":    (Stability.BETA, [
-                       "Airflow sandbox containers occasionally fail to fetch configuration on first boot. Re-run usually clears it; tracked in the roadmap.",
-                   ], "Fixture-backed DAG reads/source/logs plus trigger/pause/create writes passed with approval gates; live-API E2E pending."),
+    "airflow":    (Stability.BETA, [], "Fixture-backed DAG reads/source/logs plus trigger/pause/create writes passed with approval gates; first-boot flake mitigated by adapter-level retry (2 attempts, 1s + 3s backoff)."),
+    "redshift":   (Stability.BETA, [], "psycopg3 UNICODE codec aliased at adapter import time; live SELECT verified against Redshift Serverless. Live read/write E2E pending."),
     "dbt":        (Stability.STABLE, [], "Acme coverage shard passed 5/5 runs with read_ and write_ tool fixtures exercised against seeded dbt data."),
     "prefect":    (Stability.STABLE, [], "Acme coverage shard passed 5/5 runs with read_ and write_ tool fixtures exercised against seeded Prefect data."),
     "dagster":    (Stability.STABLE, [], "Acme coverage shard passed 5/5 runs with read_ and write_ tool fixtures exercised against seeded Dagster data."),
     "airbyte":    (Stability.STABLE, [], "Acme coverage shard passed 5/5 runs with read_ and write_ tool fixtures exercised against seeded Airbyte data."),
 
     # 🔴 known issue - disabled by default; opt-in via EXPERIMENTAL_ENABLE_<slug>
-    "redshift":   (Stability.KNOWN_ISSUE, [
-                       "psycopg3 raises 'codec not available: UNICODE' on Redshift's `select pg_catalog.version()` probe - auth + network are fine, version detection is broken (#redshift-psycopg3-codec)",
-                   ], "Adapter present and routes correctly; first SQL call fails. Fix: use psycopg2 driver or skip version probe."),
+    # (empty - Redshift was promoted to BETA after the UNICODE codec alias landed)
 
     # 🚫 unsupported - adapter exists for legacy reasons; service dead/unreachable
     "quip":       (Stability.UNSUPPORTED, [

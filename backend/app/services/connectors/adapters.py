@@ -14,6 +14,17 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.core.config import get_settings
 from app.services.connectors.catalog import CATALOG_BY_SLUG, TestResult, VerificationMode
 
+# Redshift advertises `client_encoding=UNICODE` in its startup packet, but
+# psycopg3 only knows the canonical Postgres name `UTF8`. Without this alias
+# every connection fails with `NotSupportedError: codec not available: UNICODE`
+# before any SQL runs (#redshift-psycopg3-codec).
+try:
+    import psycopg._encodings as _psycopg_encodings  # type: ignore[import-not-found]
+    _psycopg_encodings.py_codecs.setdefault(b"UNICODE", "utf-8")
+    _psycopg_encodings._py_codecs.setdefault("UNICODE", "utf-8")
+except ImportError:
+    pass
+
 DEMO_SQLITE_PATH = Path("/tmp/dataclaw_demo.sqlite")
 
 
@@ -534,6 +545,18 @@ class AirflowAdapter(HTTPConnectorAdapter):
             raw = f"{credentials['username']}:{credentials['password']}".encode()
             return {"Authorization": f"Basic {base64.b64encode(raw).decode()}"}
         return {}
+
+    async def test(self, credentials: dict[str, Any]) -> TestResult:
+        # Airflow sandbox containers occasionally fail to fetch configuration on
+        # first boot, returning 5xx or a connection error briefly. Retry with
+        # backoff so the transient case clears itself.
+        result = await super().test(credentials)
+        for delay in (1.0, 3.0):
+            if result.status != "failed":
+                return result
+            await asyncio.sleep(delay)
+            result = await super().test(credentials)
+        return result
 
     async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=20) as client:
@@ -1495,21 +1518,113 @@ class SQLiteAdapter(BaseAdapter):
         }
 
 
-class RedshiftAdapter(PostgresAdapter):
-    """Amazon Redshift uses the PostgreSQL wire protocol."""
+class RedshiftAdapter(BaseAdapter):
+    """Amazon Redshift speaks the Postgres wire protocol but is forked from
+    Postgres 8.0, so SQLAlchemy's modern psycopg dialect probes parameters
+    (`standard_conforming_strings`, etc.) that Redshift does not expose. We
+    use raw psycopg in a thread to bypass dialect introspection entirely.
+    """
 
     slug = "redshift"
 
     @staticmethod
-    def _build_url(credentials: dict[str, Any]) -> str | None:
+    def _connect_kwargs(credentials: dict[str, Any]) -> dict[str, Any] | None:
         endpoint = str(credentials.get("cluster_endpoint") or credentials.get("host") or "")
         if not endpoint or not all(credentials.get(k) for k in ("database", "user", "password")):
             return None
-        endpoint, endpoint_port, _ = parse_redshift_endpoint(endpoint, str(credentials.get("port") or "5439"))
-        port = str(credentials.get("port") or endpoint_port)
-        user = quote_plus(credentials["user"])
-        password = quote_plus(credentials["password"])
-        return f"postgresql+psycopg://{user}:{password}@{endpoint}:{port}/{credentials['database']}?connect_timeout=10"
+        host, endpoint_port, _ = parse_redshift_endpoint(endpoint, str(credentials.get("port") or "5439"))
+        port = int(credentials.get("port") or endpoint_port)
+        return {
+            "host": host,
+            "port": port,
+            "dbname": credentials["database"],
+            "user": credentials["user"],
+            "password": credentials["password"],
+            "connect_timeout": 10,
+        }
+
+    async def test(self, credentials: dict[str, Any]) -> TestResult:
+        kwargs = self._connect_kwargs(credentials)
+        if kwargs is None:
+            return TestResult(
+                slug=self.slug,
+                status="credential_required",
+                mode=VerificationMode.CREDENTIAL_REQUIRED,
+                message="Redshift requires cluster_endpoint, database, user, and password.",
+            )
+
+        def run_check() -> int:
+            import psycopg
+            with psycopg.connect(**kwargs) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("select 1")
+                    row = cur.fetchone() or (0,)
+                    return int(row[0])
+
+        try:
+            value = await asyncio.to_thread(run_check)
+        except Exception as exc:  # pragma: no cover - driver errors vary
+            return _failed_result(self.slug, VerificationMode.REAL, exc)
+        return TestResult(
+            slug=self.slug,
+            status="ok",
+            mode=VerificationMode.REAL,
+            message="Amazon Redshift connection succeeded.",
+            details={"select_1": value, "label": "Real"},
+        )
+
+    async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
+        kwargs = self._connect_kwargs(credentials)
+        if kwargs is None:
+            return {"mode": "real", "objects_synced": 0, "tables": [], "summary": "No credentials configured."}
+
+        def load_tables() -> list[dict[str, Any]]:
+            import psycopg
+            with psycopg.connect(**kwargs) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select table_schema, table_name "
+                        "from information_schema.tables "
+                        "where table_schema not in ("
+                        "  'pg_catalog', 'information_schema', 'pg_internal',"
+                        "  'pg_auto_copy', 'pg_automv', 'catalog_history'"
+                        ") "
+                        "and table_schema not like 'pg!_%' escape '!' "
+                        "order by table_schema, table_name"
+                    )
+                    rows = cur.fetchall()
+                    out: list[dict[str, Any]] = []
+                    for schema, name in rows:
+                        try:
+                            cur.execute(
+                                "select column_name, data_type from information_schema.columns "
+                                "where table_schema = %s and table_name = %s order by ordinal_position",
+                                (schema, name),
+                            )
+                            columns = [{"name": c, "type": t, "description": ""} for c, t in cur.fetchall()]
+                            cur.execute(f'select count(*) from "{schema}"."{name}"')
+                            count_row = cur.fetchone() or (0,)
+                            row_count = int(count_row[0] or 0)
+                        except psycopg.errors.InsufficientPrivilege:
+                            conn.rollback()
+                            continue
+                        out.append({
+                            "name": name,
+                            "schema": schema,
+                            "row_count": row_count,
+                            "columns": columns,
+                        })
+                    return out
+
+        tables = await asyncio.to_thread(load_tables)
+        return {
+            "mode": "real",
+            "objects_synced": len(tables),
+            "tables": tables,
+            "summary": f"Synced {len(tables)} Redshift tables from INFORMATION_SCHEMA.",
+            "source_type": "redshift",
+            "schema_name": tables[0]["schema"] if tables else "public",
+        }
 
 
 def _missing_module_result(slug: str, module: str, install_extra: str) -> TestResult:
@@ -1870,7 +1985,109 @@ class GoogleDocsAdapter(BaseAdapter):
         return {"documents": documents}
 
 
-def adapter_for(slug: str) -> ConnectorAdapter:
+# Exceptions worth retrying. Permanent failures (auth, bad creds, validation
+# errors raised as ConnectorAdapterError subclasses except the two transient
+# ones below) are deliberately excluded so we don't paper over real problems.
+_TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AdapterReachabilityError,
+    AdapterRateLimitError,
+    httpx.TimeoutException,
+    httpx.TransportError,
+    ConnectionError,
+    TimeoutError,
+)
+
+import logging as _logging  # local to keep module surface narrow
+_retry_logger = _logging.getLogger("dataclaw.connectors.retry")
+
+
+async def _run_with_backoff(
+    func,
+    *,
+    slug: str,
+    op: str,
+    attempts: int,
+    base_delay: float,
+):
+    """Call an async fn with exponential backoff on transient errors.
+
+    Permanent errors propagate on the first attempt. Each retry logs with the
+    connector slug so failures stay traceable in production logs.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await func()
+        except _TRANSIENT_EXCEPTIONS as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                break
+            delay = base_delay * (3 ** (attempt - 1))
+            _retry_logger.warning(
+                "connector_op_retrying",
+                extra={
+                    "_slug": slug,
+                    "_op": op,
+                    "_attempt": attempt,
+                    "_next_delay_s": delay,
+                    "_error": exc.__class__.__name__,
+                },
+            )
+            await asyncio.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
+
+
+class _RetryingAdapter:
+    """Decorator over a ConnectorAdapter that retries transient failures.
+
+    test() is cheap so we attempt more times with short delays; sync() is
+    expensive so we cap at two attempts to avoid amplifying load on a hot
+    upstream.
+    """
+
+    __slots__ = ("_inner", "_slug")
+
+    def __init__(self, inner, slug: str) -> None:
+        self._inner = inner
+        self._slug = slug
+
+    async def test(self, credentials: dict[str, Any]) -> TestResult:
+        return await _run_with_backoff(
+            lambda: self._inner.test(credentials),
+            slug=self._slug,
+            op="test",
+            attempts=3,
+            base_delay=0.5,
+        )
+
+    async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
+        return await _run_with_backoff(
+            lambda: self._inner.sync(credentials),
+            slug=self._slug,
+            op="sync",
+            attempts=2,
+            base_delay=5.0,
+        )
+
+    async def list_failed_runs(self, credentials: dict[str, Any], since: datetime | None = None) -> list[dict[str, Any]]:
+        # Failure-listing is read-only and infrequent; retry like test().
+        return await _run_with_backoff(
+            lambda: self._inner.list_failed_runs(credentials, since=since),
+            slug=self._slug,
+            op="list_failed_runs",
+            attempts=3,
+            base_delay=0.5,
+        )
+
+    def __getattr__(self, name: str):
+        # Forward adapter-specific helpers (e.g. ConfluenceAdapter.fetch_content)
+        # to the inner instance without retry, so callers that depend on
+        # adapter-specific methods continue to work transparently.
+        return getattr(self._inner, name)
+
+
+def _build_adapter(slug: str) -> ConnectorAdapter:
     if slug == "sqlite":
         return SQLiteAdapter()
     if slug == "postgres":
@@ -1912,3 +2129,7 @@ def adapter_for(slug: str) -> ConnectorAdapter:
     if slug in {"quip", "fivetran"}:
         return SaaSHTTPAdapter(slug)
     return CredentialRequiredAdapter(slug)
+
+
+def adapter_for(slug: str) -> ConnectorAdapter:
+    return _RetryingAdapter(_build_adapter(slug), slug)
