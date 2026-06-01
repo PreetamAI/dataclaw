@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from app.services.connectors.catalog import CATALOG_BY_SLUG, TestResult, Verific
 # before any SQL runs (#redshift-psycopg3-codec).
 try:
     import psycopg._encodings as _psycopg_encodings  # type: ignore[import-not-found]
+
     _psycopg_encodings.py_codecs.setdefault(b"UNICODE", "utf-8")
     _psycopg_encodings._py_codecs.setdefault("UNICODE", "utf-8")
 except ImportError:
@@ -82,7 +84,9 @@ class ConnectorAdapter(Protocol):
 
     async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]: ...
 
-    async def list_failed_runs(self, credentials: dict[str, Any], since: datetime | None = None) -> list[dict[str, Any]]: ...
+    async def list_failed_runs(
+        self, credentials: dict[str, Any], since: datetime | None = None
+    ) -> list[dict[str, Any]]: ...
 
 
 class BaseAdapter:
@@ -98,7 +102,9 @@ class BaseAdapter:
             "objects_synced": 0,
         }
 
-    async def list_failed_runs(self, credentials: dict[str, Any], since: datetime | None = None) -> list[dict[str, Any]]:
+    async def list_failed_runs(
+        self, credentials: dict[str, Any], since: datetime | None = None
+    ) -> list[dict[str, Any]]:
         return _collect_failed_objects(await self.sync(credentials))
 
 
@@ -164,14 +170,30 @@ def _adapter_error(slug: str, display_name: str, exc: Exception) -> ConnectorAda
         return AdapterReachabilityError(slug, f"{display_name} could not be reached.")
     message = str(exc).strip() or exc.__class__.__name__
     lower = message.lower()
-    if any(term in lower for term in ("password", "authentication", "auth", "login failed", "access denied")):
+    if any(
+        term in lower
+        for term in ("password", "authentication", "auth", "login failed", "access denied")
+    ):
         return AdapterAuthError(slug, f"{display_name} rejected credentials.")
-    if any(term in lower for term in ("timeout", "could not connect", "connection refused", "network", "unreachable")):
+    if any(
+        term in lower
+        for term in ("timeout", "could not connect", "connection refused", "network", "unreachable")
+    ):
         return AdapterReachabilityError(slug, f"{display_name} could not be reached.")
     return AdapterApiError(slug, f"{display_name} request failed: {message}")
 
 
-FAILURE_STATES = {"failed", "failure", "error", "errored", "cancelled", "canceled", "crashed", "timeout", "timed_out"}
+FAILURE_STATES = {
+    "failed",
+    "failure",
+    "error",
+    "errored",
+    "cancelled",
+    "canceled",
+    "crashed",
+    "timeout",
+    "timed_out",
+}
 
 
 def _collect_failed_objects(payload: object) -> list[dict[str, Any]]:
@@ -184,7 +206,13 @@ def _collect_failed_objects(payload: object) -> list[dict[str, Any]]:
             return
         if not isinstance(value, dict):
             return
-        status = str(value.get("status") or value.get("state") or value.get("sync_state") or value.get("last_sync_state") or "").lower()
+        status = str(
+            value.get("status")
+            or value.get("state")
+            or value.get("sync_state")
+            or value.get("last_sync_state")
+            or ""
+        ).lower()
         if status in FAILURE_STATES or any(term in status for term in ("fail", "error")):
             failures.append(value)
             return
@@ -203,7 +231,13 @@ def clean_connector_error(slug: str, exc: Exception) -> ConnectorAdapterError:
 
 def _failed_result(slug: str, mode: VerificationMode, exc: Exception) -> TestResult:
     error = clean_connector_error(slug, exc)
-    return TestResult(slug=slug, status="failed", mode=mode, message=error.clean_message(), details={"error_type": error.__class__.__name__})
+    return TestResult(
+        slug=slug,
+        status="failed",
+        mode=mode,
+        message=error.clean_message(),
+        details={"error_type": error.__class__.__name__},
+    )
 
 
 class MySQLAdapter(BaseAdapter):
@@ -241,30 +275,38 @@ class MySQLAdapter(BaseAdapter):
         try:
             async with engine.connect() as conn:
                 table_rows = (
-                    await conn.execute(
-                        text(
-                            "select table_name as name "
-                            "from information_schema.tables "
-                            "where table_schema = :schema and table_type = 'BASE TABLE' "
-                            "order by table_name"
-                        ),
-                        {"schema": credentials["database"]},
+                    (
+                        await conn.execute(
+                            text(
+                                "select table_name as name "
+                                "from information_schema.tables "
+                                "where table_schema = :schema and table_type = 'BASE TABLE' "
+                                "order by table_name"
+                            ),
+                            {"schema": credentials["database"]},
+                        )
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
                 tables = []
                 for row in table_rows:
                     name = row["name"]
                     column_rows = (
-                        await conn.execute(
-                            text(
-                                "select column_name as name, data_type as type "
-                                "from information_schema.columns "
-                                "where table_schema = :schema and table_name = :table "
-                                "order by ordinal_position"
-                            ),
-                            {"schema": credentials["database"], "table": name},
+                        (
+                            await conn.execute(
+                                text(
+                                    "select column_name as name, data_type as type "
+                                    "from information_schema.columns "
+                                    "where table_schema = :schema and table_name = :table "
+                                    "order by ordinal_position"
+                                ),
+                                {"schema": credentials["database"], "table": name},
+                            )
                         )
-                    ).mappings().all()
+                        .mappings()
+                        .all()
+                    )
                     count = await conn.scalar(text(f"select count(*) from `{name}`"))
                     tables.append(
                         {
@@ -356,7 +398,11 @@ class SQLServerAdapter(BaseAdapter):
                             (schema, name),
                         )
                         columns = [
-                            {"name": col["column_name"], "type": col["data_type"], "description": ""}
+                            {
+                                "name": col["column_name"],
+                                "type": col["data_type"],
+                                "description": "",
+                            }
                             for col in cursor.fetchall()
                         ]
                         cursor.execute(f"select count(*) as n from [{schema}].[{name}]")
@@ -390,7 +436,9 @@ class TrinoAdapter(BaseAdapter):
             import trino  # type: ignore[import-not-found]
             from trino.auth import BasicAuthentication  # type: ignore[import-not-found]
         except ImportError as exc:  # pragma: no cover - depends on deployment extras
-            raise RuntimeError("trino Python client not installed; run `pip install trino[sqlalchemy]`.") from exc
+            raise RuntimeError(
+                "trino Python client not installed; run `pip install trino[sqlalchemy]`."
+            ) from exc
 
         kwargs: dict[str, Any] = {
             "host": credentials["host"],
@@ -398,7 +446,8 @@ class TrinoAdapter(BaseAdapter):
             "user": credentials["user"],
             "catalog": credentials["catalog"],
             "schema": credentials["schema"],
-            "http_scheme": credentials.get("http_scheme") or ("https" if credentials.get("password") else "http"),
+            "http_scheme": credentials.get("http_scheme")
+            or ("https" if credentials.get("password") else "http"),
         }
         if credentials.get("password"):
             kwargs["auth"] = BasicAuthentication(credentials["user"], credentials["password"])
@@ -428,36 +477,49 @@ class TrinoAdapter(BaseAdapter):
             return _failed_result(self.slug, VerificationMode.REAL, exc)
 
     async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
+        # Only iterate tables in the user-configured schema. Without this,
+        # connectors like TPC-H expose `sf100000` (600B rows in `lineitem`) and
+        # the count(*) loop runs forever, abandons the query, and never lands.
         def load_tables() -> list[dict[str, Any]]:
+            schema = credentials.get("schema")
             with self._connect_sync(credentials) as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "select table_schema, table_name "
-                    "from information_schema.tables "
-                    "where table_catalog = ? and table_schema not in ('information_schema') "
-                    "order by table_schema, table_name",
-                    [credentials["catalog"]],
-                )
+                if schema:
+                    cursor.execute(
+                        "select table_schema, table_name "
+                        "from information_schema.tables "
+                        "where table_catalog = ? and table_schema = ? "
+                        "order by table_name",
+                        [credentials["catalog"], schema],
+                    )
+                else:
+                    cursor.execute(
+                        "select table_schema, table_name "
+                        "from information_schema.tables "
+                        "where table_catalog = ? and table_schema not in ('information_schema') "
+                        "order by table_schema, table_name",
+                        [credentials["catalog"]],
+                    )
                 base = cursor.fetchall()
                 enriched = []
-                for schema, name in base:
+                for schema_name, table_name in base:
                     cursor.execute(
                         "select column_name, data_type "
                         "from information_schema.columns "
                         "where table_catalog = ? and table_schema = ? and table_name = ? "
                         "order by ordinal_position",
-                        [credentials["catalog"], schema, name],
+                        [credentials["catalog"], schema_name, table_name],
                     )
                     columns = [
                         {"name": column_name, "type": data_type, "description": ""}
                         for column_name, data_type in cursor.fetchall()
                     ]
-                    cursor.execute(f'select count(*) from "{schema}"."{name}"')
+                    cursor.execute(f'select count(*) from "{schema_name}"."{table_name}"')
                     count_row = cursor.fetchone() or [0]
                     enriched.append(
                         {
-                            "name": name,
-                            "schema": schema,
+                            "name": table_name,
+                            "schema": schema_name,
                             "row_count": int(count_row[0] or 0),
                             "columns": columns,
                         }
@@ -613,7 +675,11 @@ class AirflowAdapter(HTTPConnectorAdapter):
                         content_type = source_response.headers.get("content-type", "")
                         if "application/json" in content_type:
                             source_payload = source_response.json()
-                            source_code = source_payload.get("source_code") or source_payload.get("source") or ""
+                            source_code = (
+                                source_payload.get("source_code")
+                                or source_payload.get("source")
+                                or ""
+                            )
                         else:
                             source_code = source_response.text
                 runs_response = await client.get(
@@ -628,8 +694,13 @@ class AirflowAdapter(HTTPConnectorAdapter):
                     {
                         "dag_id": dag_id,
                         "description": dag.get("description") or "",
-                        "schedule_interval": (dag.get("schedule_interval") or {}).get("value") if isinstance(dag.get("schedule_interval"), dict) else dag.get("schedule_interval"),
-                        "tags": [t.get("name") if isinstance(t, dict) else t for t in (dag.get("tags") or [])],
+                        "schedule_interval": (dag.get("schedule_interval") or {}).get("value")
+                        if isinstance(dag.get("schedule_interval"), dict)
+                        else dag.get("schedule_interval"),
+                        "tags": [
+                            t.get("name") if isinstance(t, dict) else t
+                            for t in (dag.get("tags") or [])
+                        ],
                         "is_paused": dag.get("is_paused"),
                         "fileloc": dag.get("fileloc"),
                         "source_code": source_code,
@@ -641,14 +712,74 @@ class AirflowAdapter(HTTPConnectorAdapter):
 
 
 class AirbyteAdapter(HTTPConnectorAdapter):
+    """Speaks both Airbyte Cloud (OAuth client_credentials → short-lived JWT)
+    and self-hosted Airbyte (long-lived static `api_key`).
+
+    Cloud bearer tokens expire after ~15 minutes. Storing a static JWT will
+    break the next sync; we accept `client_id` + `client_secret` instead and
+    fetch a fresh token at the start of every call.
+    """
+
     health_path = "/api/v1/health"
     auth_header_name = "Authorization"
     auth_prefix = "Bearer "
 
+    async def _resolve_token(self, client: httpx.AsyncClient, credentials: dict[str, Any]) -> str:
+        """Return a bearer token for this call.
+
+        Order of preference:
+        1. `client_id` + `client_secret` → exchange for a fresh JWT every call.
+        2. `api_key` → use as-is (long-lived self-hosted token or a manually
+           refreshed Cloud JWT).
+        """
+        client_id = credentials.get("client_id")
+        client_secret = credentials.get("client_secret")
+        if client_id and client_secret:
+            token_url = (
+                credentials.get("token_url") or "https://api.airbyte.com/v1/applications/token"
+            )
+            response = await client.post(
+                token_url,
+                json={
+                    "client_id": str(client_id),
+                    "client_secret": str(client_secret),
+                    "grant-type": "client_credentials",
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            access_token = payload.get("access_token")
+            if not access_token:
+                raise RuntimeError("Airbyte token endpoint returned no access_token")
+            return str(access_token)
+        token = credentials.get("api_key") or credentials.get("token") or ""
+        if not token:
+            raise RuntimeError(
+                "Airbyte requires either api_key (long-lived) or client_id + client_secret (OAuth)."
+            )
+        return str(token)
+
+    def headers(self, credentials: dict[str, Any]) -> dict[str, str]:
+        # Static path — used by the parent class's health check. The full
+        # exchange flow is in _resolve_token() and is what every real call
+        # below uses. This stays so the parent test() compiles, but the
+        # overridden test() below uses _resolve_token().
+        token = credentials.get("api_key") or credentials.get("token")
+        return {"Authorization": f"Bearer {token}"} if token else {}
+
+    def _is_cloud(self, credentials: dict[str, Any]) -> bool:
+        """Cloud public API lives at api.airbyte.com and uses `/v1/...` paths;
+        self-hosted Airbyte serves the legacy admin API under `/api/v1/...`."""
+        return "api.airbyte.com" in str(credentials.get("api_url", ""))
+
+    def _path(self, credentials: dict[str, Any], endpoint: str) -> str:
+        prefix = "/v1" if self._is_cloud(credentials) else "/api/v1"
+        return f"{self.base_url(credentials)}{prefix}{endpoint}"
+
     async def _workspace_id(
         self,
         client: httpx.AsyncClient,
-        base_url: str,
         headers: dict[str, str],
         credentials: dict[str, Any],
     ) -> str | None:
@@ -656,10 +787,17 @@ class AirbyteAdapter(HTTPConnectorAdapter):
         if explicit:
             return str(explicit)
         try:
-            response = await client.post(f"{base_url}/api/v1/workspaces/list", headers=headers, json={}, timeout=5)
+            if self._is_cloud(credentials):
+                response = await client.get(
+                    self._path(credentials, "/workspaces"), headers=headers, timeout=5
+                )
+            else:
+                response = await client.post(
+                    self._path(credentials, "/workspaces/list"), headers=headers, json={}, timeout=5
+                )
         except httpx.TimeoutException:
             return None
-        if response.status_code == 404:
+        if response.status_code in (404, 403):
             return None
         response.raise_for_status()
         payload = response.json()
@@ -667,23 +805,38 @@ class AirbyteAdapter(HTTPConnectorAdapter):
         if not workspaces:
             return None
         workspace = workspaces[0]
-        return str(workspace.get("workspaceId") or workspace.get("workspace_id") or workspace.get("id") or "")
+        return str(
+            workspace.get("workspaceId")
+            or workspace.get("workspace_id")
+            or workspace.get("id")
+            or ""
+        )
 
     async def test(self, credentials: dict[str, Any]) -> TestResult:
-        if result := _required_result(self.slug, self.definition(), credentials):
-            return result
-        base_url = self.base_url(credentials)
+        if not any(
+            [
+                credentials.get("api_key"),
+                credentials.get("client_id") and credentials.get("client_secret"),
+            ]
+        ):
+            return TestResult(
+                slug=self.slug,
+                status="credential_required",
+                mode=VerificationMode.CREDENTIAL_REQUIRED,
+                message="Airbyte requires either api_key OR client_id + client_secret.",
+            )
+        if not credentials.get("api_url"):
+            return TestResult(
+                slug=self.slug,
+                status="credential_required",
+                mode=VerificationMode.CREDENTIAL_REQUIRED,
+                message="Airbyte requires api_url.",
+            )
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.get(
-                    f"{base_url}/api/v1/health",
-                    headers=self.headers(credentials),
-                )
-                if response.status_code == 404:
-                    response = await client.get(
-                        f"{base_url}/v1/health",
-                        headers=self.headers(credentials),
-                    )
+                token = await self._resolve_token(client, credentials)
+                headers = {"Authorization": f"Bearer {token}"}
+                response = await client.get(self._path(credentials, "/health"), headers=headers)
                 response.raise_for_status()
             return TestResult(
                 slug=self.slug,
@@ -696,29 +849,40 @@ class AirbyteAdapter(HTTPConnectorAdapter):
             return _failed_result(self.slug, VerificationMode.REAL, exc)
 
     async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
-        base_url = self.base_url(credentials)
         async with httpx.AsyncClient(timeout=20) as client:
-            workspace_id = await self._workspace_id(client, base_url, self.headers(credentials), credentials)
+            token = await self._resolve_token(client, credentials)
+            headers = {"Authorization": f"Bearer {token}"}
+            workspace_id = await self._workspace_id(client, headers, credentials)
             response: httpx.Response | None = None
-            if workspace_id:
-                try:
+            if self._is_cloud(credentials):
+                # Cloud public API: GET /v1/connections (optionally filtered)
+                params = {"workspaceIds": workspace_id} if workspace_id else None
+                response = await client.get(
+                    self._path(credentials, "/connections"),
+                    headers=headers,
+                    params=params,
+                    timeout=10,
+                )
+            else:
+                # Self-hosted: POST /api/v1/connections/list
+                if workspace_id:
                     response = await client.post(
-                        f"{base_url}/api/v1/connections/list",
-                        headers=self.headers(credentials),
+                        self._path(credentials, "/connections/list"),
+                        headers=headers,
                         json={"workspaceId": workspace_id},
                         timeout=10,
                     )
-                except httpx.TimeoutException:
-                    response = None
-            if response is None or response.status_code == 404:
-                response = await client.get(
-                    f"{base_url}/v1/connections",
-                    headers=self.headers(credentials),
-                    timeout=10,
-                )
+                if response is None or response.status_code == 404:
+                    response = await client.get(
+                        f"{self.base_url(credentials)}/v1/connections",
+                        headers=headers,
+                        timeout=10,
+                    )
             response.raise_for_status()
             payload = response.json()
-        connections = payload.get("connections") or payload.get("data") or payload.get("objects") or []
+        connections = (
+            payload.get("connections") or payload.get("data") or payload.get("objects") or []
+        )
         return {
             "mode": "real",
             "objects_synced": len(connections),
@@ -726,20 +890,28 @@ class AirbyteAdapter(HTTPConnectorAdapter):
             "summary": "Synced Airbyte connections from a live API.",
         }
 
-    async def list_failed_runs(self, credentials: dict[str, Any], since: datetime | None = None) -> list[dict[str, Any]]:
-        base_url = self.base_url(credentials)
-        headers = self.headers(credentials)
-        body: dict[str, Any] = {
-            "configTypes": ["sync", "reset"],
-            "statuses": ["failed", "cancelled"],
-            "pagination": {"pageSize": 50},
-        }
-        if since:
-            body["createdAtStart"] = int(since.timestamp())
+    async def list_failed_runs(
+        self, credentials: dict[str, Any], since: datetime | None = None
+    ) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(f"{base_url}/api/v1/jobs/list", headers=headers, json=body)
-            if response.status_code == 404:
-                response = await client.get(f"{base_url}/v1/jobs", headers=headers, params={"limit": 50})
+            token = await self._resolve_token(client, credentials)
+            headers = {"Authorization": f"Bearer {token}"}
+            if self._is_cloud(credentials):
+                params = {"limit": 50, "status": "failed"}
+                response = await client.get(
+                    self._path(credentials, "/jobs"), headers=headers, params=params
+                )
+            else:
+                body: dict[str, Any] = {
+                    "configTypes": ["sync", "reset"],
+                    "statuses": ["failed", "cancelled"],
+                    "pagination": {"pageSize": 50},
+                }
+                if since:
+                    body["createdAtStart"] = int(since.timestamp())
+                response = await client.post(
+                    self._path(credentials, "/jobs/list"), headers=headers, json=body
+                )
             response.raise_for_status()
             payload = response.json()
         jobs = payload.get("jobs") or payload.get("data") or []
@@ -747,26 +919,59 @@ class AirbyteAdapter(HTTPConnectorAdapter):
 
 
 class PrefectAdapter(HTTPConnectorAdapter):
-    health_path = "/api/health"
-    sync_path = "/api/flows/filter"
+    """Speaks both Prefect Cloud (workspace-scoped URL) and self-hosted Prefect.
+
+    Cloud workspace URLs look like
+    `https://api.prefect.cloud/api/accounts/<a>/workspaces/<w>` — the `/api/`
+    prefix is already part of the workspace path, so endpoints are reached
+    directly (e.g. `<base>/health`). Self-hosted Prefect API URLs typically
+    end in `/api`, and endpoints are reached via `<base>/api/<endpoint>`.
+    """
+
     auth_header_name = "Authorization"
     auth_prefix = "Bearer "
 
     def base_url(self, credentials: dict[str, Any]) -> str:
         value = super().base_url(credentials)
+        # For Cloud workspace URLs we keep the path as-is. For self-hosted we
+        # strip a trailing `/api` so the endpoint paths below can prefix it.
+        if "/workspaces/" in value:
+            return value
         return value[: -len("/api")] if value.endswith("/api") else value
+
+    def _path(self, credentials: dict[str, Any], endpoint: str) -> str:
+        base = self.base_url(credentials)
+        prefix = "" if "/workspaces/" in base else "/api"
+        return f"{base}{prefix}{endpoint}"
 
     def headers(self, credentials: dict[str, Any]) -> dict[str, str]:
         token = credentials.get("api_key") or credentials.get("token")
-        headers: dict[str, str] = {}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        return headers
+        return {"Authorization": f"Bearer {token}"} if token else {}
+
+    async def test(self, credentials: dict[str, Any]) -> TestResult:
+        if result := _required_result(self.slug, self.definition(), credentials):
+            return result
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                response = await client.get(
+                    self._path(credentials, "/health"),
+                    headers=self.headers(credentials),
+                )
+                response.raise_for_status()
+            return TestResult(
+                slug=self.slug,
+                status="ok",
+                mode=VerificationMode.REAL,
+                message="Prefect API connection succeeded.",
+                details={"label": "Real"},
+            )
+        except Exception as exc:  # pragma: no cover - live service errors vary
+            return _failed_result(self.slug, VerificationMode.REAL, exc)
 
     async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             response = await client.post(
-                f"{self.base_url(credentials)}{self.sync_path}",
+                self._path(credentials, "/flows/filter"),
                 headers=self.headers(credentials),
                 json={"limit": 50, "sort": "CREATED_DESC"},
             )
@@ -780,7 +985,9 @@ class PrefectAdapter(HTTPConnectorAdapter):
             "summary": "Synced Prefect flows from a live API.",
         }
 
-    async def list_failed_runs(self, credentials: dict[str, Any], since: datetime | None = None) -> list[dict[str, Any]]:
+    async def list_failed_runs(
+        self, credentials: dict[str, Any], since: datetime | None = None
+    ) -> list[dict[str, Any]]:
         body: dict[str, Any] = {
             "limit": 50,
             "sort": "START_TIME_DESC",
@@ -790,7 +997,7 @@ class PrefectAdapter(HTTPConnectorAdapter):
             body["flow_runs"]["start_time"] = {"after_": since.isoformat()}
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             response = await client.post(
-                f"{self.base_url(credentials)}/api/flow_runs/filter",
+                self._path(credentials, "/flow_runs/filter"),
                 headers=self.headers(credentials),
                 json=body,
             )
@@ -800,27 +1007,65 @@ class PrefectAdapter(HTTPConnectorAdapter):
 
 
 class DagsterAdapter(HTTPConnectorAdapter):
-    health_path = "/server_info"
+    """Dagster Cloud uses the `Dagster-Cloud-Api-Token` header and exposes only
+    the `/graphql` endpoint (no `/server_info`). Self-hosted OSS Dagster has
+    no auth header and serves `/server_info` for liveness — but the GraphQL
+    `{ version }` query works on both, so we use that uniformly.
+    """
 
     def base_url(self, credentials: dict[str, Any]) -> str:
         value = str(credentials.get("graphql_url", "")).rstrip("/")
-        return value[: -len("/graphql")] if value.endswith("/graphql") else value
+        return value if value.endswith("/graphql") else f"{value}/graphql"
+
+    def headers(self, credentials: dict[str, Any]) -> dict[str, str]:
+        token = credentials.get("token") or credentials.get("api_key") or ""
+        if not token:
+            return {}
+        # Dagster Cloud user/agent tokens go on a dedicated header; the OSS
+        # webserver ignores unknown headers, so this is safe to send always.
+        return {"Dagster-Cloud-Api-Token": token}
+
+    async def test(self, credentials: dict[str, Any]) -> TestResult:
+        if result := _required_result(self.slug, self.definition(), credentials):
+            return result
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                response = await client.post(
+                    self.base_url(credentials),
+                    json={"query": "{ version }"},
+                    headers={
+                        "Content-Type": "application/json",
+                        **self.headers(credentials),
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            if payload.get("errors"):
+                raise RuntimeError(str(payload["errors"]))
+            version = payload.get("data", {}).get("version", "unknown")
+            return TestResult(
+                slug=self.slug,
+                status="ok",
+                mode=VerificationMode.REAL,
+                message=f"Dagster GraphQL connection succeeded (version {version}).",
+                details={"label": "Real", "version": version},
+            )
+        except Exception as exc:  # pragma: no cover - live service errors vary
+            return _failed_result(self.slug, VerificationMode.REAL, exc)
 
     async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
-        query = "{ assetsOrError { __typename ... on AssetConnection { nodes { id key { path } } } } }"
-        async with httpx.AsyncClient(timeout=20) as client:
+        query = (
+            "{ assetsOrError { __typename ... on AssetConnection { nodes { id key { path } } } } }"
+        )
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             response = await client.post(
-                f"{self.base_url(credentials)}/graphql",
+                self.base_url(credentials),
                 json={"query": query},
-                headers=self.headers(credentials),
+                headers={"Content-Type": "application/json", **self.headers(credentials)},
             )
             response.raise_for_status()
             payload = response.json()
-        nodes = (
-            payload.get("data", {})
-            .get("assetsOrError", {})
-            .get("nodes", [])
-        )
+        nodes = payload.get("data", {}).get("assetsOrError", {}).get("nodes", [])
         return {
             "mode": "real",
             "objects_synced": len(nodes),
@@ -828,7 +1073,9 @@ class DagsterAdapter(HTTPConnectorAdapter):
             "summary": "Synced Dagster asset metadata from a live GraphQL API.",
         }
 
-    async def list_failed_runs(self, credentials: dict[str, Any], since: datetime | None = None) -> list[dict[str, Any]]:
+    async def list_failed_runs(
+        self, credentials: dict[str, Any], since: datetime | None = None
+    ) -> list[dict[str, Any]]:
         query = (
             "query FailedRuns($filter: RunsFilter) { runsOrError(filter: $filter, limit: 50) "
             "{ __typename ... on Runs { results { runId status pipelineName startTime endTime } } } }"
@@ -836,11 +1083,11 @@ class DagsterAdapter(HTTPConnectorAdapter):
         variables: dict[str, Any] = {"filter": {"statuses": ["FAILURE", "CANCELED"]}}
         if since:
             variables["filter"]["createdAfter"] = int(since.timestamp())
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             response = await client.post(
-                f"{self.base_url(credentials)}/graphql",
+                self.base_url(credentials),
                 json={"query": query, "variables": variables},
-                headers=self.headers(credentials),
+                headers={"Content-Type": "application/json", **self.headers(credentials)},
             )
             response.raise_for_status()
             payload = response.json()
@@ -892,7 +1139,12 @@ class GitHubAdapter(BaseAdapter):
                 )
                 response.raise_for_status()
                 data = response.json()
-                synced.append({"full_name": data.get("full_name"), "default_branch": data.get("default_branch")})
+                synced.append(
+                    {
+                        "full_name": data.get("full_name"),
+                        "default_branch": data.get("default_branch"),
+                    }
+                )
         return {
             "mode": "real",
             "objects_synced": len(synced),
@@ -909,7 +1161,9 @@ class GitHubAdapter(BaseAdapter):
         synced = []
         async with httpx.AsyncClient(timeout=30) as client:
             for repo in repos:
-                repo_response = await client.get(f"{self.base_url(credentials)}/repos/{repo}", headers=headers)
+                repo_response = await client.get(
+                    f"{self.base_url(credentials)}/repos/{repo}", headers=headers
+                )
                 repo_response.raise_for_status()
                 repo_data = repo_response.json()
                 default_branch = repo_data.get("default_branch")
@@ -933,7 +1187,11 @@ class GitHubAdapter(BaseAdapter):
                             stack.append(item_path)
                             continue
                         suffix = item_path.lower()
-                        if not (suffix.endswith(".md") or suffix.endswith(".sql") or suffix == "dbt_project.yml"):
+                        if not (
+                            suffix.endswith(".md")
+                            or suffix.endswith(".sql")
+                            or suffix == "dbt_project.yml"
+                        ):
                             continue
                         download_url = item.get("download_url")
                         content = ""
@@ -942,8 +1200,16 @@ class GitHubAdapter(BaseAdapter):
                             if content_response.status_code < 400:
                                 content = content_response.text
                         elif item.get("content"):
-                            content = base64.b64decode(str(item["content"])).decode("utf-8", errors="replace")
-                        files.append({"path": item_path, "content": content, "type": suffix.rsplit(".", 1)[-1]})
+                            content = base64.b64decode(str(item["content"])).decode(
+                                "utf-8", errors="replace"
+                            )
+                        files.append(
+                            {
+                                "path": item_path,
+                                "content": content,
+                                "type": suffix.rsplit(".", 1)[-1],
+                            }
+                        )
                 synced.append({"full_name": repo_data.get("full_name") or repo, "files": files})
         return {"repos": synced}
 
@@ -982,7 +1248,9 @@ class NotionAdapter(HTTPConnectorAdapter):
         for prop in (page.get("properties") or {}).values():
             values = prop.get("title") or []
             if values:
-                return "".join(part.get("plain_text", "") for part in values) or page.get("id", "Untitled")
+                return "".join(part.get("plain_text", "") for part in values) or page.get(
+                    "id", "Untitled"
+                )
         return page.get("title") or page.get("id", "Untitled")
 
     def _block_text(self, block: dict[str, Any]) -> str:
@@ -998,7 +1266,9 @@ class NotionAdapter(HTTPConnectorAdapter):
             return f"1. {text}"
         return text
 
-    async def _page_body(self, client: httpx.AsyncClient, credentials: dict[str, Any], page_id: str) -> str:
+    async def _page_body(
+        self, client: httpx.AsyncClient, credentials: dict[str, Any], page_id: str
+    ) -> str:
         lines: list[str] = []
         cursor: str | None = None
         while True:
@@ -1044,7 +1314,8 @@ class NotionAdapter(HTTPConnectorAdapter):
                         "id": page_id,
                         "title": self._title_from_page(page),
                         "body": await self._page_body(client, credentials, page_id),
-                        "parent_id": (page.get("parent") or {}).get("page_id") or (page.get("parent") or {}).get("database_id"),
+                        "parent_id": (page.get("parent") or {}).get("page_id")
+                        or (page.get("parent") or {}).get("database_id"),
                         "last_edited_at": page.get("last_edited_time"),
                     }
                 )
@@ -1142,7 +1413,9 @@ class SaaSHTTPAdapter(HTTPConnectorAdapter):
             "summary": f"Synced {self.definition().display_name} metadata from the live API.",
         }
 
-    async def list_failed_runs(self, credentials: dict[str, Any], since: datetime | None = None) -> list[dict[str, Any]]:
+    async def list_failed_runs(
+        self, credentials: dict[str, Any], since: datetime | None = None
+    ) -> list[dict[str, Any]]:
         if self.slug == "fivetran":
             async with httpx.AsyncClient(timeout=20) as client:
                 response = await client.get(
@@ -1157,11 +1430,7 @@ class SaaSHTTPAdapter(HTTPConnectorAdapter):
                 response.raise_for_status()
                 payload = response.json()
             connectors = payload.get("data", {}).get("items") or payload.get("items") or []
-            return [
-                connector
-                for connector in connectors
-                if _collect_failed_objects(connector)
-            ]
+            return [connector for connector in connectors if _collect_failed_objects(connector)]
         return await super().list_failed_runs(credentials, since)
 
 
@@ -1285,7 +1554,10 @@ class PostgresAdapter(BaseAdapter):
                 status="ok",
                 mode=mode,
                 message="PostgreSQL connection succeeded.",
-                details={"select_1": value, "label": "Real" if mode == VerificationMode.REAL else "Demo"},
+                details={
+                    "select_1": value,
+                    "label": "Real" if mode == VerificationMode.REAL else "Demo",
+                },
             )
         except Exception as exc:  # pragma: no cover - exact driver errors vary
             return _failed_result(self.slug, mode, exc)
@@ -1299,30 +1571,38 @@ class PostgresAdapter(BaseAdapter):
         try:
             async with engine.connect() as conn:
                 rows = (
-                    await conn.execute(
-                        text(
-                            "select table_schema, table_name "
-                            "from information_schema.tables "
-                            "where table_schema not in ('pg_catalog', 'information_schema') "
-                            "order by table_schema, table_name"
+                    (
+                        await conn.execute(
+                            text(
+                                "select table_schema, table_name "
+                                "from information_schema.tables "
+                                "where table_schema not in ('pg_catalog', 'information_schema') "
+                                "order by table_schema, table_name"
+                            )
                         )
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
                 tables = []
                 for row in rows:
                     schema = row["table_schema"]
                     name = row["table_name"]
                     columns_result = (
-                        await conn.execute(
-                            text(
-                                "select column_name, data_type "
-                                "from information_schema.columns "
-                                "where table_schema = :schema and table_name = :table "
-                                "order by ordinal_position"
-                            ),
-                            {"schema": schema, "table": name},
+                        (
+                            await conn.execute(
+                                text(
+                                    "select column_name, data_type "
+                                    "from information_schema.columns "
+                                    "where table_schema = :schema and table_name = :table "
+                                    "order by ordinal_position"
+                                ),
+                                {"schema": schema, "table": name},
+                            )
                         )
-                    ).mappings().all()
+                        .mappings()
+                        .all()
+                    )
                     count = await conn.scalar(text(f'select count(*) from "{schema}"."{name}"'))
                     tables.append(
                         {
@@ -1330,7 +1610,11 @@ class PostgresAdapter(BaseAdapter):
                             "schema": schema,
                             "row_count": int(count or 0),
                             "columns": [
-                                {"name": col["column_name"], "type": col["data_type"], "description": ""}
+                                {
+                                    "name": col["column_name"],
+                                    "type": col["data_type"],
+                                    "description": "",
+                                }
                                 for col in columns_result
                             ],
                         }
@@ -1532,7 +1816,9 @@ class RedshiftAdapter(BaseAdapter):
         endpoint = str(credentials.get("cluster_endpoint") or credentials.get("host") or "")
         if not endpoint or not all(credentials.get(k) for k in ("database", "user", "password")):
             return None
-        host, endpoint_port, _ = parse_redshift_endpoint(endpoint, str(credentials.get("port") or "5439"))
+        host, endpoint_port, _ = parse_redshift_endpoint(
+            endpoint, str(credentials.get("port") or "5439")
+        )
         port = int(credentials.get("port") or endpoint_port)
         return {
             "host": host,
@@ -1555,6 +1841,7 @@ class RedshiftAdapter(BaseAdapter):
 
         def run_check() -> int:
             import psycopg
+
             with psycopg.connect(**kwargs) as conn:
                 with conn.cursor() as cur:
                     cur.execute("select 1")
@@ -1576,10 +1863,16 @@ class RedshiftAdapter(BaseAdapter):
     async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
         kwargs = self._connect_kwargs(credentials)
         if kwargs is None:
-            return {"mode": "real", "objects_synced": 0, "tables": [], "summary": "No credentials configured."}
+            return {
+                "mode": "real",
+                "objects_synced": 0,
+                "tables": [],
+                "summary": "No credentials configured.",
+            }
 
         def load_tables() -> list[dict[str, Any]]:
             import psycopg
+
             with psycopg.connect(**kwargs) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -1601,19 +1894,23 @@ class RedshiftAdapter(BaseAdapter):
                                 "where table_schema = %s and table_name = %s order by ordinal_position",
                                 (schema, name),
                             )
-                            columns = [{"name": c, "type": t, "description": ""} for c, t in cur.fetchall()]
+                            columns = [
+                                {"name": c, "type": t, "description": ""} for c, t in cur.fetchall()
+                            ]
                             cur.execute(f'select count(*) from "{schema}"."{name}"')
                             count_row = cur.fetchone() or (0,)
                             row_count = int(count_row[0] or 0)
                         except psycopg.errors.InsufficientPrivilege:
                             conn.rollback()
                             continue
-                        out.append({
-                            "name": name,
-                            "schema": schema,
-                            "row_count": row_count,
-                            "columns": columns,
-                        })
+                        out.append(
+                            {
+                                "name": name,
+                                "schema": schema,
+                                "row_count": row_count,
+                                "columns": columns,
+                            }
+                        )
                     return out
 
         tables = await asyncio.to_thread(load_tables)
@@ -1727,7 +2024,11 @@ class SnowflakeAdapter(BaseAdapter):
                             (table_schema, table_name),
                         )
                         cols = [
-                            {"name": c[0], "type": c[1].lower() if c[1] else "unknown", "description": ""}
+                            {
+                                "name": c[0],
+                                "type": c[1].lower() if c[1] else "unknown",
+                                "description": "",
+                            }
                             for c in cur.fetchall()
                         ]
                         table_ref = (
@@ -1738,14 +2039,21 @@ class SnowflakeAdapter(BaseAdapter):
                         cur.execute(f"select count(*) from {table_ref}")
                         count = int(cur.fetchone()[0])
                         tables.append(
-                            {"name": table_name, "schema": table_schema, "row_count": count, "columns": cols}
+                            {
+                                "name": table_name,
+                                "schema": table_schema,
+                                "row_count": count,
+                                "columns": cols,
+                            }
                         )
             return tables
 
         try:
             tables = await asyncio.to_thread(introspect)
         except ModuleNotFoundError as exc:
-            raise RuntimeError("snowflake.connector not installed; run `pip install dataclaw-platform[snowflake]`.") from exc
+            raise RuntimeError(
+                "snowflake.connector not installed; run `pip install dataclaw-platform[snowflake]`."
+            ) from exc
         return {
             "mode": "real",
             "objects_synced": len(tables),
@@ -1766,6 +2074,7 @@ class BigQueryAdapter(BaseAdapter):
         import json as _json
 
         from google.cloud import bigquery  # type: ignore[import-not-found]
+
         emulator_host = str(credentials.get("emulator_host") or "").strip().rstrip("/")
         if emulator_host:
             from google.auth.credentials import (
@@ -1785,7 +2094,9 @@ class BigQueryAdapter(BaseAdapter):
         if isinstance(info, str):
             info = _json.loads(info)
         creds = service_account.Credentials.from_service_account_info(info)
-        return bigquery.Client(project=credentials.get("project_id") or info.get("project_id"), credentials=creds)
+        return bigquery.Client(
+            project=credentials.get("project_id") or info.get("project_id"), credentials=creds
+        )
 
     async def test(self, credentials: dict[str, Any]) -> TestResult:
         if not str(credentials.get("emulator_host") or "").strip():
@@ -1825,7 +2136,11 @@ class BigQueryAdapter(BaseAdapter):
                             "schema": dataset.dataset_id,
                             "row_count": int(table.num_rows or 0),
                             "columns": [
-                                {"name": f.name, "type": f.field_type.lower(), "description": f.description or ""}
+                                {
+                                    "name": f.name,
+                                    "type": f.field_type.lower(),
+                                    "description": f.description or "",
+                                }
                                 for f in table.schema
                             ],
                         }
@@ -1835,7 +2150,9 @@ class BigQueryAdapter(BaseAdapter):
         try:
             tables = await asyncio.to_thread(introspect)
         except ModuleNotFoundError as exc:
-            raise RuntimeError("google-cloud-bigquery not installed; run `pip install dataclaw-platform[bigquery]`.") from exc
+            raise RuntimeError(
+                "google-cloud-bigquery not installed; run `pip install dataclaw-platform[bigquery]`."
+            ) from exc
         return {
             "mode": "real",
             "objects_synced": len(tables),
@@ -1861,7 +2178,11 @@ class DatabricksAdapter(SaaSHTTPAdapter):
                 f"{self.base_url(credentials)}/sql/warehouses",
                 headers=self.headers(credentials),
             )
-            warehouses = warehouses_resp.json().get("warehouses") if warehouses_resp.status_code < 400 else []
+            warehouses = (
+                warehouses_resp.json().get("warehouses")
+                if warehouses_resp.status_code < 400
+                else []
+            )
             jobs_resp = await client.get(
                 f"{self.base_url(credentials)}/jobs/list",
                 headers=self.headers(credentials),
@@ -1897,9 +2218,11 @@ class GoogleDocsAdapter(BaseAdapter):
 
         def run_check() -> int:
             drive, _ = self._services(credentials)
-            response = drive.files().list(
-                pageSize=1, q="mimeType='application/vnd.google-apps.document'"
-            ).execute()
+            response = (
+                drive.files()
+                .list(pageSize=1, q="mimeType='application/vnd.google-apps.document'")
+                .execute()
+            )
             return len(response.get("files", []))
 
         try:
@@ -1922,12 +2245,16 @@ class GoogleDocsAdapter(BaseAdapter):
             files: list[dict[str, Any]] = []
             page_token: str | None = None
             while True:
-                response = drive.files().list(
-                    q="mimeType='application/vnd.google-apps.document'",
-                    pageSize=100,
-                    fields="nextPageToken, files(id, name, modifiedTime, webViewLink)",
-                    pageToken=page_token,
-                ).execute()
+                response = (
+                    drive.files()
+                    .list(
+                        q="mimeType='application/vnd.google-apps.document'",
+                        pageSize=100,
+                        fields="nextPageToken, files(id, name, modifiedTime, webViewLink)",
+                        pageToken=page_token,
+                    )
+                    .execute()
+                )
                 files.extend(response.get("files", []))
                 page_token = response.get("nextPageToken")
                 if not page_token:
@@ -1937,7 +2264,9 @@ class GoogleDocsAdapter(BaseAdapter):
         try:
             docs = await asyncio.to_thread(list_docs)
         except ModuleNotFoundError as exc:
-            raise RuntimeError("google-api-python-client not installed; run `pip install dataclaw-platform[google]`.") from exc
+            raise RuntimeError(
+                "google-api-python-client not installed; run `pip install dataclaw-platform[google]`."
+            ) from exc
         return {
             "mode": "real",
             "objects_synced": len(docs),
@@ -1950,11 +2279,16 @@ class GoogleDocsAdapter(BaseAdapter):
     async def fetch_content(self, credentials: dict[str, Any]) -> dict[str, Any]:
         def fetch_bodies() -> list[dict[str, Any]]:
             drive, docs = self._services(credentials)
-            files = drive.files().list(
-                q="mimeType='application/vnd.google-apps.document'",
-                pageSize=50,
-                fields="files(id, name, modifiedTime, webViewLink)",
-            ).execute().get("files", [])
+            files = (
+                drive.files()
+                .list(
+                    q="mimeType='application/vnd.google-apps.document'",
+                    pageSize=50,
+                    fields="files(id, name, modifiedTime, webViewLink)",
+                )
+                .execute()
+                .get("files", [])
+            )
             results: list[dict[str, Any]] = []
             for f in files:
                 doc = docs.documents().get(documentId=f["id"]).execute()
@@ -1981,7 +2315,9 @@ class GoogleDocsAdapter(BaseAdapter):
         try:
             documents = await asyncio.to_thread(fetch_bodies)
         except ModuleNotFoundError as exc:
-            raise RuntimeError("google-api-python-client not installed; run `pip install dataclaw-platform[google]`.") from exc
+            raise RuntimeError(
+                "google-api-python-client not installed; run `pip install dataclaw-platform[google]`."
+            ) from exc
         return {"documents": documents}
 
 
@@ -1997,8 +2333,7 @@ _TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
     TimeoutError,
 )
 
-import logging as _logging  # local to keep module surface narrow
-_retry_logger = _logging.getLogger("dataclaw.connectors.retry")
+_retry_logger = logging.getLogger("dataclaw.connectors.retry")
 
 
 async def _run_with_backoff(
@@ -2070,7 +2405,9 @@ class _RetryingAdapter:
             base_delay=5.0,
         )
 
-    async def list_failed_runs(self, credentials: dict[str, Any], since: datetime | None = None) -> list[dict[str, Any]]:
+    async def list_failed_runs(
+        self, credentials: dict[str, Any], since: datetime | None = None
+    ) -> list[dict[str, Any]]:
         # Failure-listing is read-only and infrequent; retry like test().
         return await _run_with_backoff(
             lambda: self._inner.list_failed_runs(credentials, since=since),

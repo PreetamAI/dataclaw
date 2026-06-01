@@ -2184,7 +2184,22 @@ async def _conversation_history(session: AsyncSession, thread_id: str | None) ->
         ).all()
     )
     messages.reverse()
-    return [{"role": message.role, "content": message.content} for message in messages]
+    history: list[dict[str, str]] = []
+    for message in messages:
+        content = message.content
+        # Prepend tool-call provenance for assistant messages so follow-up
+        # turns can answer "which connector did you use" without guessing.
+        if message.role == "assistant" and message.citations:
+            for cite in message.citations:
+                if isinstance(cite, dict) and cite.get("type") == "tool_call_provenance":
+                    connector = cite.get("connector")
+                    tool = cite.get("tool")
+                    if connector:
+                        provenance = f"[provenance: tool_call={connector}.{tool}]\n"
+                        content = provenance + content
+                        break
+        history.append({"role": message.role, "content": content})
+    return history
 
 
 def _openai_tool_name(connector_slug: str, tool_name: str) -> str:
@@ -3572,7 +3587,23 @@ async def answer_question(
                 "retrieval_trace (e.g. if `customers` only appears under the sqlite "
                 "source, call sqlite_read_query_select, not the postgres equivalent). "
                 "Never assume a table exists on a connector that did not surface it "
-                "in the retrieval trace."
+                "in the retrieval trace. "
+                "Data vs. metadata: sqlite, postgres, mysql, bigquery, snowflake, "
+                "redshift, databricks, sql_server, and trino are *data* sources — "
+                "their read tools return actual rows. dbt, github, notion, confluence, "
+                "airflow, dagster, prefect, airbyte, and fivetran are *metadata* "
+                "sources — they describe pipelines, models, and docs, not row data. "
+                "For a quantitative question like 'how many orders does each "
+                "customer have', you MUST call a data-source SQL tool and execute "
+                "the aggregation; describing a dbt model definition or a wiki page "
+                "is not an answer. "
+                "Self-attribution: prior assistant turns that ran a tool start "
+                "with a marker `[provenance: tool_call=<connector>.<tool>]`. When "
+                "the user asks which connector, tool, or source you used, parse "
+                "the latest such marker and cite that connector verbatim. If no "
+                "marker is present in any prior turn, say you don't have a "
+                "recorded tool call to cite — never guess from row counts, table "
+                "names, or schema context. The marker is authoritative."
             ),
         },
         {

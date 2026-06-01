@@ -724,10 +724,9 @@ async def test_connector(
 async def _run_connector_sync(slug: str, connector_id: str, credentials: dict) -> None:
     """Execute a sync on its own session. Always finalizes sync_state.
 
-    The HTTP handler claims the row and returns 202 immediately; this task
-    owns the long-running work and the terminal state transition. A fresh
-    session is used for the recovery write so a `PendingRollbackError` from a
-    flush failure cannot prevent the failure from being recorded.
+    Used by both the synchronous default path and the opt-in background path.
+    Runs on a fresh session so a `PendingRollbackError` from a failed flush
+    cannot prevent the terminal `sync_failed` state from being recorded.
     """
     from app.db.session import SessionLocal
 
@@ -780,7 +779,7 @@ async def _run_connector_sync(slug: str, connector_id: str, credentials: dict) -
 async def sync_connector(
     slug: str,
     response: Response,
-    wait: bool = False,
+    background: bool = False,
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_admin),
 ):
@@ -816,29 +815,31 @@ async def sync_connector(
 
     connector_id = connector.id
 
-    if wait:
-        # Synchronous path for callers (tests, CLIs) that need the result inline.
-        # Production HTTP clients should prefer the default 202 + poll pattern.
-        await _run_connector_sync(slug, connector_id, credentials)
-        await session.refresh(connector)
-        if connector.sync_state == "sync_failed":
-            raise _safe_http_error(
-                "Sync failed.",
-                RuntimeError(connector.last_sync_error or "Sync failed."),
-            )
-        return connector.sync_summary or {"sync_state": connector.sync_state, "slug": slug}
+    if background:
+        # Opt-in async path for long-running connectors. Returns 202; clients
+        # poll GET /connectors/{slug} for terminal state.
+        asyncio.create_task(
+            _run_connector_sync(slug, connector_id, credentials),
+            name=f"connector-sync:{slug}",
+        )
+        response.status_code = 202
+        return {
+            "sync_state": "syncing",
+            "slug": slug,
+            "connector_id": connector_id,
+            "poll_url": f"/connectors/{slug}",
+        }
 
-    asyncio.create_task(
-        _run_connector_sync(slug, connector_id, credentials),
-        name=f"connector-sync:{slug}",
-    )
-    response.status_code = 202
-    return {
-        "sync_state": "syncing",
-        "slug": slug,
-        "connector_id": connector_id,
-        "poll_url": f"/connectors/{slug}",
-    }
+    # Default: run inline, return 200 with the sync summary. Matches the
+    # pre-2026-06 behavior the UI and existing tests/CLIs depend on.
+    await _run_connector_sync(slug, connector_id, credentials)
+    await session.refresh(connector)
+    if connector.sync_state == "sync_failed":
+        raise _safe_http_error(
+            "Sync failed.",
+            RuntimeError(connector.last_sync_error or "Sync failed."),
+        )
+    return connector.sync_summary or {"sync_state": connector.sync_state, "slug": slug}
 
 
 AGENT_RUNNERS = {
@@ -1850,6 +1851,17 @@ async def _persist_chat_response(
     payload: ChatRequest,
     response: dict[str, Any],
 ) -> dict[str, Any]:
+    citations = list(response.get("citations") or [])
+    # Stash the connector+tool that produced this answer so follow-up turns
+    # can cite it factually instead of guessing (was: "which connector did
+    # that run against?" hallucinating PostgreSQL after a SQLite call).
+    tool_call = response.get("tool_call")
+    if isinstance(tool_call, dict) and tool_call.get("connector_slug"):
+        citations.insert(0, {
+            "type": "tool_call_provenance",
+            "connector": tool_call.get("connector_slug"),
+            "tool": tool_call.get("tool"),
+        })
     user_message = ChatMessage(thread_id=thread.id, role="user", content=payload.question)
     assistant_message = ChatMessage(
         thread_id=thread.id,
@@ -1858,7 +1870,7 @@ async def _persist_chat_response(
         sql=response.get("sql"),
         provider=response.get("provider"),
         llm_status=response.get("llm_status"),
-        citations=response.get("citations") or [],
+        citations=citations,
         rows=response.get("rows") or [],
         chart_spec=response.get("chart_spec"),
         action=response.get("action"),

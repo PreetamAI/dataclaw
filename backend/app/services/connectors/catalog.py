@@ -336,10 +336,15 @@ def catalog() -> list[ConnectorDefinition]:
             category=ConnectorCategory.ORCHESTRATION,
             logo_key="airbyte",
             docs_url="https://reference.airbyte.com/",
-            credential_schema=[host_field("api_url", "API URL"), token_field("api_key", "API key")],
+            credential_schema=[
+                host_field("api_url", "API URL"),
+                CredentialField(name="api_key", label="API key (long-lived self-hosted token, or a fresh Cloud JWT)", secret=True, required=False),
+                CredentialField(name="client_id", label="Client ID (Airbyte Cloud Application — recommended)", secret=False, required=False),
+                CredentialField(name="client_secret", label="Client secret (Airbyte Cloud Application)", secret=True, required=False),
+            ],
             local_verification=VerificationMode.REAL,
             sync_behavior="Sync sources, destinations, connection state, schemas, and job failures.",
-            production_notes="Supports Airbyte API-compatible deployments.",
+            production_notes="Airbyte Cloud bearer tokens expire in ~15 minutes — store the Application's client_id + client_secret instead and the adapter will fetch a fresh JWT on every call.",
         ),
         ConnectorDefinition(
             slug="openai",
