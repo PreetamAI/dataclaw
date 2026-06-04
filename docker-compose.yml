@@ -51,6 +51,42 @@ services:
       - backend-api
       - chroma
 
+  # ---------------------------------------------------------------------
+  # Optional: self-hosted Langfuse for chat tracing + eval observability.
+  # Uncomment this block + the matching env-vars below to run Langfuse
+  # alongside DataClaw instead of using Langfuse Cloud.
+  #
+  #   1. `docker compose up -d langfuse`
+  #   2. Visit http://localhost:3000 and create a project + API keys.
+  #   3. In DataClaw → Settings → Integrations, paste the keys with
+  #      host=http://langfuse:3000 (or http://localhost:3000 if hitting
+  #      from your host machine).
+  # ---------------------------------------------------------------------
+  # langfuse:
+  #   image: langfuse/langfuse:3
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+  #     NEXTAUTH_URL: http://localhost:3000
+  #     NEXTAUTH_SECRET: change-me-langfuse-nextauth-secret
+  #     SALT: change-me-langfuse-salt
+  #     ENCRYPTION_KEY: change-me-64-hex-char-encryption-key-change-me
+  #     TELEMETRY_ENABLED: "false"
+  #   depends_on:
+  #     - langfuse-db
+  # langfuse-db:
+  #   image: postgres:16
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: langfuse
+  #     POSTGRES_PASSWORD: langfuse
+  #     POSTGRES_DB: langfuse
+  #   volumes:
+  #     - langfuse-db-data:/var/lib/postgresql/data
+
 volumes:
   app-data:
   chroma-data:
+  # langfuse-db-data:

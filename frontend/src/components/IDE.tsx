@@ -5,6 +5,7 @@ import { useDispatch } from "react-redux";
 import { errorMessage } from "../lib/errors";
 import { ChatChart } from "./ChatChart";
 import { CitationDrawer } from "./CitationDrawer";
+import { FeedbackBar } from "./FeedbackBar";
 import { RetrievalTrace } from "./RetrievalTrace";
 import { WriteToolPreview } from "./WriteToolPreview";
 import {
@@ -111,6 +112,16 @@ export function IDE({ activeThreadId, setActiveThreadId, hasKnowledgeBase, onErr
   }, [connectorSlug, selectedConnector]);
 
   const messages: ChatMessage[] = threadQuery.data?.messages ?? [];
+  // Latest assistant turn drives the end-of-chat feedback bar. Scoping
+  // feedback to one specific message (the most recent answer) lets the
+  // existing 👎-correction → eval_case pipeline keep working — we just
+  // moved the UI surface from per-bubble to thread-end.
+  const lastAssistantMessage = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === "assistant") return messages[i];
+    }
+    return null;
+  }, [messages]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -249,6 +260,17 @@ export function IDE({ activeThreadId, setActiveThreadId, hasKnowledgeBase, onErr
               {streamedAnswer ? <p>{streamedAnswer}</p> : <span>Thinking…</span>}
             </div>
           </>
+        ) : null}
+
+        {/* Thread-level feedback: shown once at the end of the chat,
+            scoped to the most recent assistant turn. Per Sairam's
+            preference — keeps the conversation clean and gives one
+            clear "rate the last answer" surface. */}
+        {!pending && lastAssistantMessage ? (
+          <div className="chat-end-feedback">
+            <span className="chat-end-feedback-label">How was the last answer?</span>
+            <FeedbackBar message={lastAssistantMessage} />
+          </div>
         ) : null}
       </div>
 

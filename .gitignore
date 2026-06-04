@@ -62,3 +62,10 @@ tests/integration/TEST_RUNBOOK.md
 
 # Branch-local working notes — kept on disk, never committed.
 docs/BRANCH_ISSUES_STATUS.md
+
+# Internal manual testing guide for QA — kept on disk, never committed.
+docs/EVALS_TESTING_GUIDE.md
+
+# Phase test files (Evals + Langfuse intelligence layer) — kept on disk
+# for local QA, not committed. Features ship without their pytest scaffolding.
+backend/tests/test_phase*.py

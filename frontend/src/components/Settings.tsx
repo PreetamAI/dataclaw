@@ -1,9 +1,13 @@
-import { Bot, Search } from "lucide-react";
+import { Bot, Plug, Search } from "lucide-react";
 import { useState } from "react";
 
+import { Integrations } from "./Integrations";
 import { LlmProviders } from "./LlmProviders";
 
-const TABS = [{ key: "llm", label: "LLM provider", icon: Bot }] as const;
+const TABS = [
+  { key: "llm", label: "LLM provider", icon: Bot },
+  { key: "integrations", label: "Integrations", icon: Plug },
+] as const;
 
 type SettingsTab = (typeof TABS)[number]["key"];
 
@@ -48,6 +52,7 @@ export function Settings() {
         </div>
 
         {tab === "llm" ? <LlmProviders search={search} /> : null}
+        {tab === "integrations" ? <Integrations search={search} /> : null}
       </section>
     </section>
   );

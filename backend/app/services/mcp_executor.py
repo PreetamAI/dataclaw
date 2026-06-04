@@ -40,6 +40,7 @@ from app.services.connectors.adapters import (
     parse_redshift_endpoint,
 )
 from app.services.mcp_catalog import tools_for_slug
+from app.services.observability.tracing import span as trace_span
 from app.services.sql_safety import UnsafeSqlError, validate_read_only_sql, validate_write_sql
 
 logger = logging.getLogger("dataclaw.mcp_executor")
@@ -782,38 +783,71 @@ async def execute_mcp_tool(
     run_id: str | None = None,
     record_tool_call: bool = True,
 ) -> dict[str, Any]:
-    with session.no_autoflush:
-        agent = await resolve_granted_agent(session, agent_id, connector_slug, tool_name)
-    started = perf_counter()
-    try:
-        if _scope_for_tool(tool_name) == "write" and not arguments.get("__approved"):
-            await _preflight_write_arguments(
-                session=session,
-                connector_slug=connector_slug,
-                tool_name=tool_name,
-                arguments=arguments,
-            )
-            result = await _pending_mcp_approval(
-                session,
-                agent_id=agent.id,
-                connector_slug=connector_slug,
-                tool_name=tool_name,
-                arguments=arguments,
-                title=f"Agent {agent.name} wants to run {connector_slug}.{tool_name}",
-            )
-        else:
-            result = await _execute_mcp_tool_inner(
-                session=session,
-                engine=engine,
-                connector_slug=connector_slug,
-                tool_name=tool_name,
-                arguments=arguments,
-                agent=agent,
-                user_email=user_email,
-            )
-    except Exception as exc:
-        if record_tool_call:
-            try:
+    async with trace_span(
+        "tool",
+        f"{connector_slug}.{tool_name}",
+        input={
+            "connector_slug": connector_slug,
+            "tool_name": tool_name,
+            "arguments": _redact_tool_arguments(arguments),
+        },
+        metadata={"connector_slug": connector_slug, "tool": tool_name},
+    ) as tool_sp:
+        with session.no_autoflush:
+            agent = await resolve_granted_agent(session, agent_id, connector_slug, tool_name)
+        started = perf_counter()
+        try:
+            if _scope_for_tool(tool_name) == "write" and not arguments.get("__approved"):
+                await _preflight_write_arguments(
+                    session=session,
+                    connector_slug=connector_slug,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                )
+                result = await _pending_mcp_approval(
+                    session,
+                    agent_id=agent.id,
+                    connector_slug=connector_slug,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    title=f"Agent {agent.name} wants to run {connector_slug}.{tool_name}",
+                )
+            else:
+                result = await _execute_mcp_tool_inner(
+                    session=session,
+                    engine=engine,
+                    connector_slug=connector_slug,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    agent=agent,
+                    user_email=user_email,
+                )
+        except Exception as exc:
+            if record_tool_call:
+                try:
+                    await _record_tool_call(
+                        session,
+                        agent_name=agent.name,
+                        connector_slug=connector_slug,
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        run_id=run_id,
+                        status="error",
+                        error_message=exc.__class__.__name__,
+                        latency_ms=int((perf_counter() - started) * 1000),
+                    )
+                except Exception as audit_exc:
+                    logger.warning(
+                        "tool_call_audit_failed",
+                        extra={
+                            "_tool": f"{connector_slug}.{tool_name}",
+                            "_error": audit_exc.__class__.__name__,
+                            "_message": str(audit_exc),
+                        },
+                    )
+            raise
+        try:
+            if record_tool_call:
                 await _record_tool_call(
                     session,
                     agent_name=agent.name,
@@ -821,52 +855,65 @@ async def execute_mcp_tool(
                     tool_name=tool_name,
                     arguments=arguments,
                     run_id=run_id,
-                    status="error",
-                    error_message=exc.__class__.__name__,
+                    status=str(result.get("status") or "ok"),
+                    result=result,
                     latency_ms=int((perf_counter() - started) * 1000),
                 )
-            except Exception as audit_exc:
-                logger.warning(
-                    "tool_call_audit_failed",
-                    extra={
-                        "_tool": f"{connector_slug}.{tool_name}",
-                        "_error": audit_exc.__class__.__name__,
-                        "_message": str(audit_exc),
-                    },
-                )
-        raise
-    try:
-        if record_tool_call:
-            await _record_tool_call(
+            await _record_generic_write_audit(
                 session,
-                agent_name=agent.name,
+                agent=agent,
                 connector_slug=connector_slug,
                 tool_name=tool_name,
                 arguments=arguments,
-                run_id=run_id,
-                status=str(result.get("status") or "ok"),
                 result=result,
-                latency_ms=int((perf_counter() - started) * 1000),
+                user_email=user_email,
             )
-        await _record_generic_write_audit(
-            session,
-            agent=agent,
-            connector_slug=connector_slug,
-            tool_name=tool_name,
-            arguments=arguments,
-            result=result,
-            user_email=user_email,
+        except Exception as audit_exc:
+            logger.warning(
+                "tool_call_audit_failed",
+                extra={
+                    "_tool": f"{connector_slug}.{tool_name}",
+                    "_error": audit_exc.__class__.__name__,
+                    "_message": str(audit_exc),
+                },
+            )
+        tool_sp.set_output(
+            {
+                "status": result.get("status") if isinstance(result, dict) else None,
+                "row_count": len(result.get("rows") or []) if isinstance(result, dict) else None,
+                "summary": (result.get("summary") or "")[:400] if isinstance(result, dict) else None,
+            }
         )
-    except Exception as audit_exc:
-        logger.warning(
-            "tool_call_audit_failed",
-            extra={
-                "_tool": f"{connector_slug}.{tool_name}",
-                "_error": audit_exc.__class__.__name__,
-                "_message": str(audit_exc),
-            },
-        )
-    return result
+        return result
+
+
+# Tool arguments may contain credentials, large blobs, or PII. We redact
+# obvious secrets and truncate large strings before they hit the span store.
+_TOOL_ARG_SECRET_KEYS = frozenset({
+    "password",
+    "api_key",
+    "secret",
+    "secret_key",
+    "token",
+    "client_secret",
+    "private_key",
+    "credentials",
+})
+
+
+def _redact_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(arguments, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in arguments.items():
+        if key.lower() in _TOOL_ARG_SECRET_KEYS:
+            out[key] = "***"
+            continue
+        if isinstance(value, str) and len(value) > 2000:
+            out[key] = value[:2000] + "...[truncated]"
+        else:
+            out[key] = value
+    return out
 
 
 async def _record_generic_write_audit(

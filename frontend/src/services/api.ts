@@ -5,6 +5,8 @@ import type {
   ChatResponse,
   ChatThread,
   ChatThreadSummary,
+  ChatTraceLink,
+  ChatTraceView,
   Connector,
   ConnectorCatalogItem,
   ConnectorRecord,
@@ -12,6 +14,8 @@ import type {
   Dashboard,
   Agent,
   AgentSummary,
+  FeedbackCreateRequest,
+  FeedbackRecord,
   GrantMatrix,
   CompileResult,
   LlmCatalogItem,
@@ -27,6 +31,10 @@ import type {
   MonitoringAgentDescriptor,
   ObservabilityEvent,
   ObservabilityFeed,
+  ObservabilityListResponse,
+  ObservabilityRecord,
+  ObservabilityTestResponse,
+  ObservabilityUpdateRequest,
   QueryRequest,
   QueryResponse,
   SyncResponse,
@@ -60,7 +68,7 @@ export const dataclawApi = createApi({
       return headers;
     },
   }),
-  tagTypes: ["Auth", "Connectors", "Workspace", "Dashboard", "ChatThreads", "Observability", "LlmProviders", "Agents", "AgentGrants", "McpCatalog", "Knowledge", "Monitoring", "Worker"],
+  tagTypes: ["Auth", "Connectors", "Workspace", "Dashboard", "ChatThreads", "Observability", "LlmProviders", "Agents", "AgentGrants", "McpCatalog", "Knowledge", "Monitoring", "Worker", "Feedback", "ObservabilityProviders", "ChatTraces"],
   endpoints: (builder) => ({
     login: builder.mutation<LoginResponse, LoginRequest>({
       query: (body) => ({ url: "/auth/login", method: "POST", body }),
@@ -262,6 +270,48 @@ export const dataclawApi = createApi({
       query: () => "/monitoring/agents",
       providesTags: ["Monitoring"],
     }),
+    submitFeedback: builder.mutation<FeedbackRecord, FeedbackCreateRequest>({
+      query: (body) => ({ url: "/feedback", method: "POST", body }),
+      invalidatesTags: (_result, _err, arg) => [
+        { type: "Feedback", id: arg.chat_message_id },
+      ],
+    }),
+    chatTrace: builder.query<ChatTraceView, string>({
+      query: (messageId) => `/chat-messages/${messageId}/trace`,
+      providesTags: (_result, _err, id) => [{ type: "ChatTraces", id }],
+    }),
+    chatTraceLink: builder.query<ChatTraceLink, string>({
+      query: (messageId) => `/chat-messages/${messageId}/trace-link`,
+      providesTags: (_result, _err, id) => [{ type: "ChatTraces", id }],
+    }),
+    observabilityProviders: builder.query<ObservabilityListResponse, void>({
+      query: () => "/integrations/observability",
+      providesTags: ["ObservabilityProviders"],
+    }),
+    upsertObservabilityProvider: builder.mutation<
+      ObservabilityRecord,
+      { slug: string; body: ObservabilityUpdateRequest }
+    >({
+      query: ({ slug, body }) => ({
+        url: `/integrations/observability/${slug}`,
+        method: "PUT",
+        body,
+      }),
+      invalidatesTags: ["ObservabilityProviders"],
+    }),
+    disableObservabilityProvider: builder.mutation<ObservabilityRecord, string>({
+      query: (slug) => ({
+        url: `/integrations/observability/${slug}`,
+        method: "DELETE",
+      }),
+      invalidatesTags: ["ObservabilityProviders"],
+    }),
+    testObservabilityProvider: builder.mutation<ObservabilityTestResponse, string>({
+      query: (slug) => ({
+        url: `/integrations/observability/${slug}/test`,
+        method: "POST",
+      }),
+    }),
   }),
 });
 
@@ -313,4 +363,11 @@ export const {
   useKnowledgeGraphQuery,
   useLazyKnowledgeGraphQuery,
   useMonitoringAgentsQuery,
+  useSubmitFeedbackMutation,
+  useChatTraceQuery,
+  useChatTraceLinkQuery,
+  useObservabilityProvidersQuery,
+  useUpsertObservabilityProviderMutation,
+  useDisableObservabilityProviderMutation,
+  useTestObservabilityProviderMutation,
 } = dataclawApi;
