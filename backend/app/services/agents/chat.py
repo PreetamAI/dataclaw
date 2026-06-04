@@ -29,12 +29,92 @@ from app.services.agents.runtime import BudgetExceeded, enforce_run_budget
 from app.services.connectors.catalog import CATALOG_BY_SLUG
 from app.services.knowledge_compile.service import graph_neighbors
 from app.services.mcp_catalog import tools_for_slug
+from app.services.evals.cases import EvalCaseService
+from app.services.evals.suggestions import (
+    load_chat_prompt_override,
+    load_chat_rules_md,
+)
 from app.services.mcp_executor import McpExecutionError, execute_mcp_tool
 from app.services.observability.tracing import span as trace_span
 from app.services.retrieval import BrainRetriever
 from app.services.settings_store import active_llm_provider_slug, resolve_openai
 from app.services.sql_safety import UnsafeSqlError, validate_read_only_sql
 from app.services.vector_store import vector_store
+
+
+async def _lookup_golden(
+    session: AsyncSession,
+    *,
+    workspace_id: str,
+    question: str,
+    connector_slug: str | None,
+) -> Any | None:
+    """Return a golden EvalCase whose question matches, or None.
+
+    Logs lookups as a `golden_lookup` span so the trace UI shows hit/miss
+    without us having to plumb a custom event. Any error is swallowed —
+    a flaky golden-query lookup must never break a chat turn.
+    """
+    try:
+        async with trace_span(
+            "retrieval",
+            "golden_lookup",
+            input={"question": question, "connector_slug": connector_slug},
+        ) as sp:
+            match = await EvalCaseService(session).find_golden_for_question(
+                workspace_id=workspace_id,
+                question=question,
+                connector_slug=connector_slug,
+            )
+            sp.set_output(
+                {
+                    "hit": bool(match),
+                    "eval_case_id": match.id if match else None,
+                }
+            )
+            return match
+    except Exception:
+        # Defensive: nothing about this path is allowed to break chat.
+        return None
+
+
+async def _golden_hit_response(
+    session: AsyncSession,
+    *,
+    golden: Any,
+    question: str,
+    provider_slug: str,
+) -> dict[str, Any]:
+    """Build a chat response from a golden case match. Skips the LLM."""
+    async with trace_span(
+        "tool",
+        "golden_query_hit",
+        input={"eval_case_id": golden.id},
+        metadata={"connector_slug": golden.expected_connector_slug},
+    ) as sp:
+        answer = (
+            golden.expected_answer
+            or "Returning the canonical answer for this question (from a "
+               "golden eval case)."
+        )
+        sp.set_output({"eval_case_id": golden.id, "had_expected_answer": bool(golden.expected_answer)})
+        return {
+            "answer": answer,
+            "sql": golden.expected_sql,
+            "table": None,
+            "rows": list(golden.expected_result_preview or []),
+            "citations": list(golden.expected_citations or []) + [
+                {
+                    "type": "golden_query_provenance",
+                    "eval_case_id": golden.id,
+                }
+            ],
+            "provider": provider_slug,
+            "llm_status": "golden_query_hit",
+            "status": "ok",
+            "chart_spec": None,
+            "retrieval_trace": {"golden_query_hit": True, "eval_case_id": golden.id},
+        }
 
 
 async def _traced_chat_completion(
@@ -3430,6 +3510,24 @@ async def answer_question(
     workspace = await session.scalar(select(Workspace).limit(1))
     if workspace:
         vector_store.ensure_embedding_model(workspace.id, embedding_model, api_key=api_key, base_url=base_url)
+        # Short-circuit on golden-query match: a previously approved-and-
+        # promoted eval case whose question matches this one is the
+        # canonical answer. Skip the LLM entirely and return its
+        # expected_sql + expected_answer. Phase 2 uses normalized exact
+        # match; Phase 3 swaps in vector similarity.
+        golden = await _lookup_golden(
+            session,
+            workspace_id=workspace.id,
+            question=question,
+            connector_slug=connector_slug,
+        )
+        if golden is not None:
+            return await _golden_hit_response(
+                session,
+                golden=golden,
+                question=question,
+                provider_slug=provider_slug,
+            )
     wiki_pages = list((await session.scalars(select(WikiPage).where(WikiPage.workspace_id == workspace.id))).all()) if workspace else []
     retrieval_warning: str | None = None
     if workspace:
@@ -3617,7 +3715,37 @@ async def answer_question(
             "openai_tools_capped",
             extra={"_original": original_count, "_limit": OPENAI_TOOLS_LIMIT},
         )
+    # Phase 5: optional workspace-level overrides applied to the system
+    # context. ``prompt_override`` lands as a Workspace-prompt-extension
+    # system message (additive, reversible by deleting the AppSetting); the
+    # ``rules_md`` text becomes a "Workspace rules" preamble that nudges
+    # the LLM toward conventions the agent should always apply.
+    prompt_override = await load_chat_prompt_override(session)
+    rules_md_text = await load_chat_rules_md(session)
+    extra_system_messages: list[dict[str, str]] = []
+    if rules_md_text:
+        extra_system_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Workspace rules — apply these to every answer:\n"
+                    f"{rules_md_text}"
+                ),
+            }
+        )
+    if prompt_override:
+        extra_system_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Workspace prompt extension (from accepted eval-improvement "
+                    f"suggestions):\n{prompt_override}"
+                ),
+            }
+        )
+
     messages: list[dict[str, str]] = [
+        *extra_system_messages,
         {
             "role": "system",
             "content": (

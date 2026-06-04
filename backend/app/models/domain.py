@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, IdMixin, TimestampMixin
@@ -351,6 +351,167 @@ class ChatSpan(IdMixin, Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class EvalCase(IdMixin, TimestampMixin, Base):
+    """Canonical eval case. Same row backs both golden queries (Theme 2) and
+    eval datasets (Theme 3) — status separates the two:
+      candidate -> auto- or feedback-generated; pending user review
+      approved  -> reviewed and added to the eval suite
+      golden    -> approved + designated as the canonical answer for its
+                   question (chat will prefer this SQL over re-generating)
+      archived  -> retired; kept for history, excluded from runs and lookups
+    """
+
+    __tablename__ = "eval_cases"
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    question: Mapped[str] = mapped_column(Text)
+    expected_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_sql: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_connector_slug: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    expected_tool: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # [{"source": "...", "table": "...", "columns": ["..."]}]
+    expected_citations: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    # Hash + small sample of the result-set captured at promote-golden time so
+    # eval runs can compare without re-executing the warehouse query.
+    expected_result_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    expected_result_preview: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # status enum: candidate | approved | golden | archived
+    status: Mapped[str] = mapped_column(String(20), default="candidate", index=True)
+    # origin enum: manual | feedback | auto:schema | auto:kg | auto:lineage |
+    #              auto:dbt | auto:airflow | auto:dagster | auto:fixture
+    origin: Mapped[str] = mapped_column(String(40), default="manual", index=True)
+    source_chat_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class EvalRun(IdMixin, Base):
+    """One execution of an eval case. A batch is N runs sharing batch_id.
+
+    The synthetic chat_message_id points at the assistant message we created
+    in a kind='eval' ChatThread; this means the existing tracing surface
+    (chat_spans, Langfuse) covers eval runs for free — no parallel trace
+    schema.
+    """
+
+    __tablename__ = "eval_runs"
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    batch_id: Mapped[str] = mapped_column(String(64), index=True)
+    eval_case_id: Mapped[str] = mapped_column(
+        ForeignKey("eval_cases.id", ondelete="CASCADE"), index=True
+    )
+    chat_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    passed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # enum: wrong_connector | wrong_tool | bad_retrieval | sql_error |
+    #       safety_block | hallucination | missing_citation | formatting |
+    #       runner_error | unknown
+    failure_category: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    actual_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actual_sql: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actual_citations: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    actual_result_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    actual_result_preview: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    langfuse_trace_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        index=True,
+    )
+
+
+class EvalResult(IdMixin, Base):
+    """One metric score against one EvalRun. Metric plug-ins write these."""
+
+    __tablename__ = "eval_results"
+
+    eval_run_id: Mapped[str] = mapped_column(
+        ForeignKey("eval_runs.id", ondelete="CASCADE"), index=True
+    )
+    metric: Mapped[str] = mapped_column(String(60), index=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # status: ok | skipped | error
+    status: Mapped[str] = mapped_column(String(20), default="ok", index=True)
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class EvalSuggestion(IdMixin, TimestampMixin, Base):
+    """A diagnose-time suggestion for improving an eval case's outcome.
+
+    Each row points at the EvalRun that triggered it and carries a concrete
+    diff the user can Apply (or Dismiss). The kind enum determines which
+    apply-path the suggestion goes through (golden query, prompt override,
+    workspace rules, etc.).
+    """
+
+    __tablename__ = "eval_suggestions"
+
+    eval_run_id: Mapped[str] = mapped_column(
+        ForeignKey("eval_runs.id", ondelete="CASCADE"), index=True
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    # kind enum (see services/evals/diagnose.py:SUGGESTION_KINDS):
+    #   golden_query | prompt_diff | rules_md | tool_description_diff |
+    #   retrieval_context | connector_routing
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    rationale: Mapped[str] = mapped_column(Text, default="")
+    current_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proposed_value: Mapped[str] = mapped_column(Text)
+    target: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.7)
+    source: Mapped[str] = mapped_column(String(20), default="rules")  # rules | llm
+    # status enum: pending | applied | dismissed
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    apply_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    apply_result: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class EvalMetricThreshold(IdMixin, TimestampMixin, Base):
+    """User-configurable per-metric pass bar for a workspace.
+
+    Absent rows fall back to per-metric module defaults (see
+    services/evals/metrics/__init__.py:DEFAULT_THRESHOLDS).
+    """
+
+    __tablename__ = "eval_metric_thresholds"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "metric", name="uq_eval_thresholds_identity"),
+    )
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    metric: Mapped[str] = mapped_column(String(60))
+    pass_threshold: Mapped[float] = mapped_column(Float, default=0.5)
 
 
 class Feedback(IdMixin, TimestampMixin, Base):

@@ -10,6 +10,7 @@ import type {
   ObservabilityCatalogItem,
   ObservabilityRecord,
 } from "../types";
+import { EvalConfigCard } from "./EvalConfigCard";
 
 export function Integrations({ search }: { search: string }) {
   const { data, isLoading, error } = useObservabilityProvidersQuery();
@@ -46,6 +47,7 @@ export function Integrations({ search }: { search: string }) {
           record={data.records[item.slug]}
         />
       ))}
+      <EvalConfigCard />
     </div>
   );
 }

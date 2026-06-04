@@ -5,6 +5,7 @@ import {
   useSubmitFeedbackMutation,
 } from "../services/api";
 import type { ChatMessage } from "../types";
+import { EvalCorrectionForm } from "./EvalCorrectionForm";
 
 type Status = "idle" | "submitting" | "submitted" | "error";
 
@@ -12,8 +13,7 @@ export function FeedbackBar({ message }: { message: ChatMessage }) {
   const messageId = message.id;
   const [submit, submitState] = useSubmitFeedbackMutation();
   const [selected, setSelected] = useState<"positive" | "negative" | null>(null);
-  const [commentOpen, setCommentOpen] = useState(false);
-  const [comment, setComment] = useState("");
+  const [correctionOpen, setCorrectionOpen] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
 
   // Lazy: only fetch the Langfuse link when the user expands "view trace".
@@ -33,28 +33,10 @@ export function FeedbackBar({ message }: { message: ChatMessage }) {
       }).unwrap();
       setStatus("submitted");
       if (sentiment === "negative") {
-        setCommentOpen(true);
+        // Phase 2: 👎 opens the structured correction form. Phase 1 stored
+        // just a comment; the candidate eval case carries far more signal.
+        setCorrectionOpen(true);
       }
-    } catch {
-      setStatus("error");
-    }
-  };
-
-  const saveComment = async () => {
-    if (!comment.trim()) {
-      setCommentOpen(false);
-      return;
-    }
-    setStatus("submitting");
-    try {
-      await submit({
-        chat_message_id: messageId,
-        sentiment: "negative",
-        comment: comment.trim(),
-      }).unwrap();
-      setStatus("submitted");
-      setCommentOpen(false);
-      setComment("");
     } catch {
       setStatus("error");
     }
@@ -88,7 +70,7 @@ export function FeedbackBar({ message }: { message: ChatMessage }) {
         >
           {traceOpen ? "Hide trace" : "View trace"}
         </button>
-        {status === "submitted" && !commentOpen ? (
+        {status === "submitted" && !correctionOpen ? (
           <span className="feedback-status feedback-status-ok">Saved</span>
         ) : null}
         {status === "error" ? (
@@ -98,33 +80,11 @@ export function FeedbackBar({ message }: { message: ChatMessage }) {
         ) : null}
       </div>
 
-      {commentOpen && selected === "negative" ? (
-        <div className="feedback-comment">
-          <label htmlFor={`feedback-comment-${messageId}`}>
-            Tell us what went wrong (optional)
-          </label>
-          <textarea
-            id={`feedback-comment-${messageId}`}
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="e.g. wrong table, wrong join, hallucinated column…"
-            rows={3}
-          />
-          <div className="feedback-comment-actions">
-            <button
-              type="button"
-              onClick={() => {
-                setCommentOpen(false);
-                setComment("");
-              }}
-            >
-              Skip
-            </button>
-            <button type="button" onClick={saveComment}>
-              Save comment
-            </button>
-          </div>
-        </div>
+      {correctionOpen && selected === "negative" ? (
+        <EvalCorrectionForm
+          message={message}
+          onClose={() => setCorrectionOpen(false)}
+        />
       ) : null}
 
       {traceOpen ? (

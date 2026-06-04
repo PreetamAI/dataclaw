@@ -8,6 +8,27 @@ import type {
   ChatTraceLink,
   ChatTraceView,
   Connector,
+  BatchSummary,
+  BulkActionResponse,
+  DashboardResponse,
+  EvalCase,
+  EvalCaseCreateRequest,
+  EvalCaseFromFeedbackRequest,
+  EvalCaseListQuery,
+  EvalCasePatchRequest,
+  DiagnoseRequest,
+  DiagnoseStatusResponse,
+  EvalConfig,
+  EvalConfigUpdateRequest,
+  EvalRun,
+  EvalRunDetail,
+  EvalRunListQuery,
+  EvalSuggestion,
+  EvalSuggestionCatalog,
+  GenerateCandidatesRequest,
+  GenerateCandidatesResponse,
+  ProducerCatalog,
+  RunBatchRequest,
   ConnectorCatalogItem,
   ConnectorRecord,
   ConnectorTestResponse,
@@ -68,7 +89,7 @@ export const dataclawApi = createApi({
       return headers;
     },
   }),
-  tagTypes: ["Auth", "Connectors", "Workspace", "Dashboard", "ChatThreads", "Observability", "LlmProviders", "Agents", "AgentGrants", "McpCatalog", "Knowledge", "Monitoring", "Worker", "Feedback", "ObservabilityProviders", "ChatTraces"],
+  tagTypes: ["Auth", "Connectors", "Workspace", "Dashboard", "ChatThreads", "Observability", "LlmProviders", "Agents", "AgentGrants", "McpCatalog", "Knowledge", "Monitoring", "Worker", "Feedback", "ObservabilityProviders", "ChatTraces", "EvalCases", "EvalRuns", "EvalDashboard", "EvalSuggestions"],
   endpoints: (builder) => ({
     login: builder.mutation<LoginResponse, LoginRequest>({
       query: (body) => ({ url: "/auth/login", method: "POST", body }),
@@ -312,6 +333,200 @@ export const dataclawApi = createApi({
         method: "POST",
       }),
     }),
+    evalCases: builder.query<EvalCase[], EvalCaseListQuery | void>({
+      query: (params) => {
+        const search = new URLSearchParams();
+        if (params) {
+          for (const [key, value] of Object.entries(params)) {
+            if (value !== undefined && value !== null && value !== "") {
+              search.set(key, String(value));
+            }
+          }
+        }
+        const qs = search.toString();
+        return qs ? `/evals/cases?${qs}` : "/evals/cases";
+      },
+      providesTags: (result) => [
+        ...(result ? result.map((c) => ({ type: "EvalCases" as const, id: c.id })) : []),
+        { type: "EvalCases", id: "LIST" },
+      ],
+    }),
+    evalCase: builder.query<EvalCase, string>({
+      query: (id) => `/evals/cases/${id}`,
+      providesTags: (_r, _e, id) => [{ type: "EvalCases", id }],
+    }),
+    createEvalCase: builder.mutation<EvalCase, EvalCaseCreateRequest>({
+      query: (body) => ({ url: "/evals/cases", method: "POST", body }),
+      invalidatesTags: [{ type: "EvalCases", id: "LIST" }, "Feedback"],
+    }),
+    createEvalCaseFromFeedback: builder.mutation<EvalCase, EvalCaseFromFeedbackRequest>({
+      query: (body) => ({ url: "/evals/cases/from-feedback", method: "POST", body }),
+      invalidatesTags: [{ type: "EvalCases", id: "LIST" }, "Feedback"],
+    }),
+    patchEvalCase: builder.mutation<EvalCase, { id: string; body: EvalCasePatchRequest }>({
+      query: ({ id, body }) => ({ url: `/evals/cases/${id}`, method: "PATCH", body }),
+      invalidatesTags: (_r, _e, arg) => [
+        { type: "EvalCases", id: arg.id },
+        { type: "EvalCases", id: "LIST" },
+      ],
+    }),
+    approveEvalCase: builder.mutation<EvalCase, string>({
+      query: (id) => ({ url: `/evals/cases/${id}/approve`, method: "POST" }),
+      invalidatesTags: (_r, _e, id) => [
+        { type: "EvalCases", id },
+        { type: "EvalCases", id: "LIST" },
+      ],
+    }),
+    promoteGoldenEvalCase: builder.mutation<EvalCase, string>({
+      query: (id) => ({ url: `/evals/cases/${id}/promote-golden`, method: "POST" }),
+      invalidatesTags: (_r, _e, id) => [
+        { type: "EvalCases", id },
+        { type: "EvalCases", id: "LIST" },
+      ],
+    }),
+    archiveEvalCase: builder.mutation<EvalCase, string>({
+      query: (id) => ({ url: `/evals/cases/${id}/archive`, method: "POST" }),
+      invalidatesTags: (_r, _e, id) => [
+        { type: "EvalCases", id },
+        { type: "EvalCases", id: "LIST" },
+      ],
+    }),
+    unarchiveEvalCase: builder.mutation<EvalCase, string>({
+      query: (id) => ({ url: `/evals/cases/${id}/unarchive`, method: "POST" }),
+      invalidatesTags: (_r, _e, id) => [
+        { type: "EvalCases", id },
+        { type: "EvalCases", id: "LIST" },
+      ],
+    }),
+    evalProducers: builder.query<ProducerCatalog, void>({
+      query: () => "/evals/producers",
+    }),
+    generateEvalCandidates: builder.mutation<
+      GenerateCandidatesResponse,
+      GenerateCandidatesRequest
+    >({
+      query: (body) => ({
+        url: "/evals/cases/generate-candidates",
+        method: "POST",
+        body,
+      }),
+      invalidatesTags: [{ type: "EvalCases", id: "LIST" }],
+    }),
+    bulkApproveEvalCases: builder.mutation<BulkActionResponse, string[]>({
+      query: (case_ids) => ({
+        url: "/evals/cases/bulk-approve",
+        method: "POST",
+        body: { case_ids },
+      }),
+      invalidatesTags: [{ type: "EvalCases", id: "LIST" }],
+    }),
+    bulkArchiveEvalCases: builder.mutation<BulkActionResponse, string[]>({
+      query: (case_ids) => ({
+        url: "/evals/cases/bulk-archive",
+        method: "POST",
+        body: { case_ids },
+      }),
+      invalidatesTags: [{ type: "EvalCases", id: "LIST" }],
+    }),
+    runEvalBatch: builder.mutation<BatchSummary, RunBatchRequest>({
+      query: (body) => ({ url: "/evals/runs", method: "POST", body }),
+      invalidatesTags: [
+        { type: "EvalRuns", id: "LIST" },
+        { type: "EvalDashboard", id: "DASH" },
+      ],
+    }),
+    evalRuns: builder.query<EvalRun[], EvalRunListQuery | void>({
+      query: (params) => {
+        const search = new URLSearchParams();
+        if (params) {
+          for (const [key, value] of Object.entries(params)) {
+            if (value !== undefined && value !== null && value !== "") {
+              search.set(key, String(value));
+            }
+          }
+        }
+        const qs = search.toString();
+        return qs ? `/evals/runs?${qs}` : "/evals/runs";
+      },
+      providesTags: (result) => [
+        ...(result ? result.map((r) => ({ type: "EvalRuns" as const, id: r.id })) : []),
+        { type: "EvalRuns", id: "LIST" },
+      ],
+    }),
+    evalRun: builder.query<EvalRunDetail, string>({
+      query: (id) => `/evals/runs/${id}`,
+      providesTags: (_r, _e, id) => [{ type: "EvalRuns", id }],
+    }),
+    evalDashboard: builder.query<DashboardResponse, number | void>({
+      query: (rangeDays) =>
+        rangeDays
+          ? `/evals/metrics/dashboard?range_days=${rangeDays}`
+          : "/evals/metrics/dashboard",
+      providesTags: [{ type: "EvalDashboard", id: "DASH" }],
+    }),
+    suggestionKinds: builder.query<EvalSuggestionCatalog, void>({
+      query: () => "/evals/suggestions/kinds",
+    }),
+    runSuggestions: builder.query<EvalSuggestion[], string>({
+      query: (runId) => `/evals/runs/${runId}/suggestions`,
+      providesTags: (_r, _e, id) => [{ type: "EvalSuggestions", id }],
+    }),
+    diagnoseRun: builder.mutation<
+      EvalSuggestion[],
+      { runId: string; body?: DiagnoseRequest }
+    >({
+      query: ({ runId, body }) => ({
+        url: `/evals/runs/${runId}/diagnose`,
+        method: "POST",
+        body: body ?? {},
+      }),
+      invalidatesTags: (_r, _e, arg) => [{ type: "EvalSuggestions", id: arg.runId }],
+    }),
+    applySuggestion: builder.mutation<EvalSuggestion, string>({
+      query: (id) => ({
+        url: `/evals/suggestions/${id}/apply`,
+        method: "POST",
+      }),
+      invalidatesTags: (result) =>
+        result
+          ? [
+              { type: "EvalSuggestions", id: result.eval_run_id },
+              { type: "EvalCases", id: "LIST" },
+            ]
+          : [{ type: "EvalCases", id: "LIST" }],
+    }),
+    dismissSuggestion: builder.mutation<EvalSuggestion, string>({
+      query: (id) => ({
+        url: `/evals/suggestions/${id}/dismiss`,
+        method: "POST",
+      }),
+      invalidatesTags: (result) =>
+        result ? [{ type: "EvalSuggestions", id: result.eval_run_id }] : [],
+    }),
+    revertSuggestion: builder.mutation<EvalSuggestion, string>({
+      query: (id) => ({
+        url: `/evals/suggestions/${id}/revert`,
+        method: "POST",
+      }),
+      invalidatesTags: (result) =>
+        result
+          ? [
+              { type: "EvalSuggestions", id: result.eval_run_id },
+              { type: "EvalCases", id: "LIST" },
+            ]
+          : [{ type: "EvalCases", id: "LIST" }],
+    }),
+    evalConfig: builder.query<EvalConfig, void>({
+      query: () => "/evals/config",
+      providesTags: ["EvalDashboard"],
+    }),
+    updateEvalConfig: builder.mutation<EvalConfig, EvalConfigUpdateRequest>({
+      query: (body) => ({ url: "/evals/config", method: "PUT", body }),
+      invalidatesTags: ["EvalDashboard"],
+    }),
+    diagnoseStatus: builder.query<DiagnoseStatusResponse, string>({
+      query: (runId) => `/evals/runs/${runId}/diagnose/status`,
+    }),
   }),
 });
 
@@ -370,4 +585,30 @@ export const {
   useUpsertObservabilityProviderMutation,
   useDisableObservabilityProviderMutation,
   useTestObservabilityProviderMutation,
+  useEvalCasesQuery,
+  useEvalCaseQuery,
+  useCreateEvalCaseMutation,
+  useCreateEvalCaseFromFeedbackMutation,
+  usePatchEvalCaseMutation,
+  useApproveEvalCaseMutation,
+  usePromoteGoldenEvalCaseMutation,
+  useArchiveEvalCaseMutation,
+  useUnarchiveEvalCaseMutation,
+  useEvalProducersQuery,
+  useGenerateEvalCandidatesMutation,
+  useBulkApproveEvalCasesMutation,
+  useBulkArchiveEvalCasesMutation,
+  useRunEvalBatchMutation,
+  useEvalRunsQuery,
+  useEvalRunQuery,
+  useEvalDashboardQuery,
+  useSuggestionKindsQuery,
+  useRunSuggestionsQuery,
+  useDiagnoseRunMutation,
+  useApplySuggestionMutation,
+  useDismissSuggestionMutation,
+  useRevertSuggestionMutation,
+  useEvalConfigQuery,
+  useUpdateEvalConfigMutation,
+  useDiagnoseStatusQuery,
 } = dataclawApi;

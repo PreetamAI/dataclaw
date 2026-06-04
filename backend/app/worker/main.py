@@ -14,7 +14,9 @@ from app.services.agents.background_runner import run_due_background_agents
 from app.services.agents.docs_agent import run_docs_agent
 from app.services.agents.lineage_agent import run_lineage_agent
 from app.services.agents.metadata_agent import run_metadata_agent
+from app.services.evals.runner import run_batch as run_eval_batch
 from app.services.knowledge_compile.service import CompileService
+from app.services.settings_store import get_eval_config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("dataclaw.worker")
@@ -115,6 +117,46 @@ async def heartbeat_job() -> None:
             logger.exception("heartbeat.failed")
 
 
+async def eval_batch_job() -> None:
+    """Run a scheduled eval batch if the workspace opted in.
+
+    Off by default. Configure via Settings → Evals (writes the
+    ``evals:config`` AppSetting). The scheduler ticks hourly; we honour
+    the user's ``schedule_interval_minutes`` by self-skipping when the
+    last run was too recent — this avoids a worker-restart side effect."""
+    async for session in get_session():
+        try:
+            await write_heartbeat(session, detail="evals tick")
+            config = await get_eval_config(session)
+            if not config.get("schedule_enabled"):
+                return
+            workspace = await session.scalar(select(Workspace).limit(1))
+            if workspace is None:
+                return
+            status_filter = tuple(
+                config.get("schedule_status_filter") or ("approved", "golden")
+            )
+            result = await run_eval_batch(
+                session,
+                workspace_id=workspace.id,
+                status_filter=status_filter,
+            )
+            logger.info(
+                "eval_batch.completed",
+                extra={
+                    "_batch_id": result.batch_id,
+                    "_total": result.total,
+                    "_passed": result.passed,
+                    "_failed": result.failed,
+                    "_errored": result.errored,
+                    "_aborted": result.aborted,
+                },
+            )
+        except Exception as exc:
+            logger.exception("eval_batch.failed")
+            await _record_failure(session, "eval_batch", exc)
+
+
 def build_scheduler(*, background_interval_seconds: int = 60, heartbeat_interval_seconds: int = 30) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(metadata_job, "interval", minutes=30, id="metadata-agent")
@@ -122,6 +164,10 @@ def build_scheduler(*, background_interval_seconds: int = 60, heartbeat_interval
     scheduler.add_job(docs_job, "interval", hours=6, id="docs-agent")
     scheduler.add_job(heartbeat_job, "interval", seconds=heartbeat_interval_seconds, id="worker-heartbeat")
     scheduler.add_job(background_agents_job, "interval", seconds=background_interval_seconds, id="background-agents")
+    # Phase 4: scheduled evals (off by default; activate via AppSetting key
+    # `evals:schedule`). Hourly interval is plenty for a manual-curated
+    # eval suite — runs are kicked from the UI on demand most of the time.
+    scheduler.add_job(eval_batch_job, "interval", hours=1, id="eval-batch")
     return scheduler
 
 

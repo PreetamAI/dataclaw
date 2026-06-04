@@ -1,4 +1,4 @@
-export type TabName = "Editor" | "Connectors" | "Knowledge" | "Settings" | "Gateway" | "Agents" | "Monitoring";
+export type TabName = "Editor" | "Connectors" | "Knowledge" | "Settings" | "Gateway" | "Agents" | "Monitoring" | "Evals";
 
 export type LlmField = {
   name: string;
@@ -447,6 +447,293 @@ export type ChatTraceLink = {
   chat_message_id: string;
   trace_id: string | null;
   langfuse_url: string | null;
+};
+
+export type EvalCaseStatus = "candidate" | "approved" | "golden" | "archived";
+
+export type EvalCaseOrigin =
+  | "manual"
+  | "feedback"
+  | "auto:schema"
+  | "auto:kg"
+  | "auto:lineage"
+  | "auto:dbt"
+  | "auto:airflow"
+  | "auto:dagster"
+  | "auto:fixture";
+
+export type EvalCaseCitation = {
+  source?: string | null;
+  table?: string | null;
+  columns?: string[] | null;
+  type?: string | null;
+  connector?: string | null;
+  tool?: string | null;
+  title?: string | null;
+  path?: string | null;
+};
+
+export type EvalCase = {
+  id: string;
+  workspace_id: string;
+  question: string;
+  expected_answer: string | null;
+  expected_sql: string | null;
+  expected_connector_slug: string | null;
+  expected_tool: string | null;
+  expected_citations: EvalCaseCitation[];
+  expected_result_hash: string | null;
+  expected_result_preview: Record<string, unknown>[];
+  tags: string[];
+  status: EvalCaseStatus;
+  origin: EvalCaseOrigin;
+  source_chat_message_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EvalCaseCreateRequest = {
+  question: string;
+  expected_answer?: string | null;
+  expected_sql?: string | null;
+  expected_connector_slug?: string | null;
+  expected_tool?: string | null;
+  expected_citations?: EvalCaseCitation[] | null;
+  tags?: string[] | null;
+  origin?: EvalCaseOrigin;
+  status?: EvalCaseStatus;
+};
+
+export type EvalCaseFromFeedbackRequest = {
+  chat_message_id: string;
+  question?: string | null;
+  expected_answer?: string | null;
+  expected_sql?: string | null;
+  expected_connector_slug?: string | null;
+  expected_tool?: string | null;
+  expected_citations?: EvalCaseCitation[] | null;
+  tags?: string[] | null;
+};
+
+export type EvalCasePatchRequest = {
+  question?: string | null;
+  expected_answer?: string | null;
+  expected_sql?: string | null;
+  expected_connector_slug?: string | null;
+  expected_tool?: string | null;
+  expected_citations?: EvalCaseCitation[] | null;
+  tags?: string[] | null;
+};
+
+export type EvalCaseListQuery = {
+  status?: EvalCaseStatus;
+  origin?: EvalCaseOrigin;
+  tag?: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type ProducerCatalogItem = {
+  slug: string;
+  display_name: string;
+  origin: string;
+};
+
+export type ProducerCatalog = {
+  producers: ProducerCatalogItem[];
+  default_limit_per_source: number;
+  workspace_candidate_ceiling: number;
+};
+
+export type GenerateCandidatesRequest = {
+  sources?: string[] | null;
+  limit_per_source?: number;
+};
+
+export type ProducerResult = {
+  slug: string;
+  display_name: string;
+  produced: number;
+  inserted: number;
+  skipped_duplicate: number;
+  skipped_cap: number;
+  error: string | null;
+};
+
+export type GenerateCandidatesResponse = {
+  workspace_id: string;
+  inserted_ids: string[];
+  producers: ProducerResult[];
+  candidate_ceiling: number;
+  candidates_in_queue_before: number;
+  candidates_in_queue_after: number;
+  ceiling_reached: boolean;
+};
+
+export type BulkActionResult = {
+  id: string;
+  ok: boolean;
+  status: string | null;
+  error: string | null;
+};
+
+export type BulkActionResponse = {
+  results: BulkActionResult[];
+};
+
+export type EvalRun = {
+  id: string;
+  workspace_id: string;
+  batch_id: string;
+  eval_case_id: string;
+  chat_message_id: string | null;
+  passed: boolean;
+  failure_category: string | null;
+  actual_answer: string | null;
+  actual_sql: string | null;
+  actual_citations: Record<string, unknown>[];
+  actual_result_preview: Record<string, unknown>[];
+  actual_result_hash: string | null;
+  langfuse_trace_id: string | null;
+  duration_ms: number;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  cost_usd: number | null;
+  model: string | null;
+  error: string | null;
+  created_at: string;
+};
+
+export type EvalResult = {
+  metric: string;
+  status: "ok" | "skipped" | "error" | string;
+  score: number | null;
+  passed: boolean | null;
+  detail: Record<string, unknown>;
+};
+
+export type EvalRunDetail = EvalRun & {
+  case: EvalCase;
+  results: EvalResult[];
+};
+
+export type EvalRunListQuery = {
+  batch_id?: string;
+  eval_case_id?: string;
+  passed?: boolean;
+  since_hours?: number;
+  limit?: number;
+  offset?: number;
+};
+
+export type RunBatchRequest = {
+  case_ids?: string[] | null;
+  status_filter?: string[] | null;
+  repeat?: number;
+};
+
+export type BatchSummary = {
+  batch_id: string;
+  workspace_id: string;
+  total: number;
+  passed: number;
+  failed: number;
+  errored: number;
+  run_ids: string[];
+  aborted: boolean;
+  abort_reason: string | null;
+  cost_usd: number;
+};
+
+export type EvalConfig = {
+  schedule_enabled: boolean;
+  schedule_interval_minutes: number;
+  schedule_status_filter: string[];
+  batch_max_cost_usd: number;
+  judges_enabled: boolean;
+  batch_max_concurrency: number;
+};
+
+export type EvalConfigUpdateRequest = Partial<EvalConfig>;
+
+export type DashboardMetricSummary = {
+  metric: string;
+  mean: number | null;
+  pass_rate: number | null;
+  sample_size: number;
+};
+
+export type DashboardBucket = {
+  date: string;
+  runs: number;
+  passed: number;
+  failed: number;
+  avg_duration_ms: number | null;
+  avg_cost_usd: number | null;
+};
+
+export type EvalSuggestionKind =
+  | "golden_query"
+  | "prompt_diff"
+  | "rules_md"
+  | "tool_description_diff"
+  | "retrieval_context"
+  | "connector_routing";
+
+export type EvalSuggestionStatus = "pending" | "applied" | "dismissed" | "reverted";
+
+export type EvalSuggestion = {
+  id: string;
+  eval_run_id: string;
+  workspace_id: string;
+  kind: EvalSuggestionKind;
+  title: string;
+  rationale: string;
+  current_value: string | null;
+  proposed_value: string;
+  target: string | null;
+  confidence: number;
+  source: "rules" | "llm" | string;
+  status: EvalSuggestionStatus;
+  apply_payload: Record<string, unknown>;
+  apply_result: Record<string, unknown>;
+  applied_at: string | null;
+  applied_by: string | null;
+  created_at: string;
+  updated_at: string;
+  apply_supported: boolean;
+};
+
+export type EvalSuggestionCatalog = {
+  kinds: EvalSuggestionKind[];
+  apply_supported: EvalSuggestionKind[];
+};
+
+export type DiagnoseRequest = {
+  use_llm?: boolean;
+  background?: boolean;
+};
+
+export type DiagnoseStatusResponse = {
+  run_id: string;
+  status: "idle" | "running" | "completed" | string; // "error: ..." too
+};
+
+export type DashboardResponse = {
+  workspace_id: string;
+  range_days: number;
+  total_runs: number;
+  pass_rate: number | null;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  total_cost_usd: number;
+  total_tokens: number;
+  regression_count: number;
+  failure_category_counts: Record<string, number>;
+  metrics: DashboardMetricSummary[];
+  daily: DashboardBucket[];
 };
 
 export type ChatThreadSummary = {

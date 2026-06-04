@@ -308,15 +308,18 @@ app.add_middleware(
     ],
 )
 
-# Phase 1 observability routers. Kept in dedicated modules so the
-# observability surface can grow without bloating this file further.
+# Phase 1 evals/observability routers. Kept in dedicated modules so the
+# evals surface can grow (Phase 2+: cases, runs, suggestions) without
+# bloating this file further.
 from app.api.chat_traces import router as chat_traces_router  # noqa: E402
+from app.api.evals import router as evals_router  # noqa: E402
 from app.api.feedback import router as feedback_router  # noqa: E402
 from app.api.integrations import router as integrations_router  # noqa: E402
 
 app.include_router(feedback_router)
 app.include_router(integrations_router)
 app.include_router(chat_traces_router)
+app.include_router(evals_router)
 
 
 @app.exception_handler(ChromaUnreachableError)

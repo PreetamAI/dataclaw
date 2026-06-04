@@ -1,6 +1,7 @@
 import {
   Activity,
   Brain,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   ChevronsLeft,
@@ -54,6 +55,10 @@ const SECTIONS: Section[] = [
   {
     label: "Gateway",
     items: [{ key: "Gateway", label: "Observability", icon: Activity }],
+  },
+  {
+    label: "Quality",
+    items: [{ key: "Evals", label: "Evals", icon: CheckCircle2 }],
   },
 ];
 

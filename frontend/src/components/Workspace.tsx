@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { Connectors } from "./Connectors";
+import { Evals } from "./Evals";
 import { Gateway } from "./Gateway";
 import { IDE } from "./IDE";
 import { Agents } from "./Agents";
@@ -43,6 +44,7 @@ const BREADCRUMBS: Record<TabName, [string, string]> = {
   Monitoring: ["Agents", "Monitoring"],
   Gateway: ["Gateway", "Observability"],
   Agents: ["Agents", "Configuration"],
+  Evals: ["Quality", "Evals"],
 };
 
 export function Workspace(props: WorkspaceProps) {
@@ -128,6 +130,8 @@ export function Workspace(props: WorkspaceProps) {
             <Agents />
           ) : props.tab === "Knowledge" ? (
             <Knowledge />
+          ) : props.tab === "Evals" ? (
+            <Evals />
           ) : (
             <Connectors
               connectors={props.connectors}
