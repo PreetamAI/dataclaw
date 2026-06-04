@@ -2734,3 +2734,231 @@ code, kbd {
     justify-self: start;
   }
 }
+
+/* ---------- End-of-chat feedback (thread-level) ---------- */
+.chat-end-feedback {
+  margin: 14px 0 4px 0;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chat-end-feedback-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(229, 231, 235, 0.55);
+}
+.chat-end-feedback .feedback-bar {
+  margin-top: 0;
+}
+
+/* ---------- Feedback bar (chat) ---------- */
+.feedback-bar {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.feedback-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.feedback-button {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  color: inherit;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.feedback-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+.feedback-button-selected {
+  border-color: rgba(96, 165, 250, 0.6);
+  background: rgba(96, 165, 250, 0.12);
+}
+.feedback-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.feedback-link {
+  background: none;
+  border: none;
+  color: rgba(125, 211, 252, 0.9);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  text-decoration: none;
+}
+.feedback-link:hover {
+  text-decoration: underline;
+}
+.feedback-status {
+  font-size: 11px;
+  margin-left: 4px;
+}
+.feedback-status-ok { color: rgba(134, 239, 172, 0.9); }
+.feedback-status-error { color: rgba(248, 113, 113, 0.9); }
+.feedback-comment {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.feedback-comment label {
+  font-size: 11px;
+  color: rgba(229, 231, 235, 0.7);
+}
+.feedback-comment textarea {
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.feedback-comment-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.feedback-comment-actions button {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 5px;
+  background: rgba(96, 165, 250, 0.18);
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  color: inherit;
+  cursor: pointer;
+}
+.feedback-trace {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: rgba(229, 231, 235, 0.75);
+}
+.feedback-trace-note {
+  font-size: 12px;
+  color: rgba(229, 231, 235, 0.65);
+}
+
+/* ---------- Integrations / Settings cards ---------- */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+  padding: 16px 0;
+}
+.settings-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.settings-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.settings-card-header h3 {
+  margin: 0 0 4px 0;
+  font-size: 15px;
+}
+.settings-card-header p {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(229, 231, 235, 0.65);
+  line-height: 1.4;
+}
+.settings-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.settings-status-on { background: rgba(134, 239, 172, 0.18); color: rgba(187, 247, 208, 0.95); }
+.settings-status-off { background: rgba(148, 163, 184, 0.18); color: rgba(203, 213, 225, 0.85); }
+.settings-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.settings-field input[type="text"],
+.settings-field input[type="password"] {
+  font-family: inherit;
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+.settings-field-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.settings-secret-hint {
+  font-style: italic;
+  color: rgba(148, 163, 184, 0.9);
+  font-size: 11px;
+}
+.settings-card-footer {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.settings-card-footer button {
+  background: rgba(96, 165, 250, 0.18);
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  color: inherit;
+  border-radius: 5px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.settings-card-footer button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.settings-link {
+  background: none;
+  border: none;
+  color: rgba(125, 211, 252, 0.9);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  text-decoration: none;
+}
+.settings-link:hover { text-decoration: underline; }
+.settings-status-message {
+  font-size: 12px;
+  color: rgba(229, 231, 235, 0.85);
+}
+.settings-empty {
+  padding: 24px;
+  text-align: center;
+  color: rgba(229, 231, 235, 0.6);
+  font-size: 13px;
+}
+

@@ -46,6 +46,12 @@ class ChatResponse(BaseModel):
     tool_result: dict[str, Any] | None = None
     tool_results: list[dict[str, Any]] = Field(default_factory=list)
     retrieval_trace: dict[str, Any] = Field(default_factory=dict)
+    # Cross-link handles: trace_id is the deterministic id used by the local
+    # span store AND (when configured) Langfuse. langfuse_url is populated
+    # only when a Langfuse integration is enabled for the workspace.
+    trace_id: str | None = None
+    langfuse_url: str | None = None
+    message_id: str | None = None
     thread_id: str
     thread_title: str
 

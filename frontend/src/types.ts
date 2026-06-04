@@ -342,6 +342,9 @@ export type ChatResponse = {
   metadata_sources?: unknown[];
   chart_spec?: Record<string, unknown> | null;
   retrieval_trace?: Record<string, unknown>;
+  trace_id?: string | null;
+  langfuse_url?: string | null;
+  message_id?: string | null;
 };
 
 export type ChatMessage = {
@@ -356,7 +359,94 @@ export type ChatMessage = {
   chart_spec?: Record<string, unknown> | null;
   action?: ChatAction | null;
   retrieval_trace?: Record<string, unknown>;
+  trace_id?: string | null;
   created_at: string;
+};
+
+export type FeedbackSentiment = "positive" | "negative";
+
+export type FeedbackRecord = {
+  id: string;
+  chat_message_id: string;
+  sentiment: FeedbackSentiment;
+  comment: string | null;
+  user_id: string | null;
+  langfuse_score_id: string | null;
+  eval_case_id: string | null;
+};
+
+export type FeedbackCreateRequest = {
+  chat_message_id: string;
+  sentiment: FeedbackSentiment;
+  comment?: string | null;
+};
+
+export type ObservabilityField = {
+  name: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+  placeholder: string;
+};
+
+export type ObservabilityCatalogItem = {
+  slug: string;
+  display_name: string;
+  docs_url: string;
+  description: string;
+  fields: ObservabilityField[];
+};
+
+export type ObservabilityRecord = {
+  slug: string;
+  configured: boolean;
+  enabled: boolean;
+  values: Record<string, string>;
+  secrets_set: string[];
+  secret_previews: Record<string, string>;
+};
+
+export type ObservabilityListResponse = {
+  catalog: ObservabilityCatalogItem[];
+  records: Record<string, ObservabilityRecord>;
+};
+
+export type ObservabilityUpdateRequest = {
+  values: Record<string, string | boolean | null>;
+};
+
+export type ObservabilityTestResponse = {
+  status: "ok" | "error" | "not_configured" | "sdk_missing" | string;
+  message: string;
+};
+
+export type ChatSpanRecord = {
+  id: string;
+  parent_span_id: string | null;
+  kind: "root" | "retrieval" | "llm" | "tool" | "sql" | string;
+  name: string;
+  status: "ok" | "error" | string;
+  error: string | null;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  usage: Record<string, unknown>;
+  model: string | null;
+  latency_ms: number;
+  started_at: string;
+  ended_at: string;
+};
+
+export type ChatTraceView = {
+  chat_message_id: string;
+  trace_id: string | null;
+  spans: ChatSpanRecord[];
+};
+
+export type ChatTraceLink = {
+  chat_message_id: string;
+  trace_id: string | null;
+  langfuse_url: string | null;
 };
 
 export type ChatThreadSummary = {

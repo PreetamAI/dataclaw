@@ -30,10 +30,56 @@ from app.services.connectors.catalog import CATALOG_BY_SLUG
 from app.services.knowledge_compile.service import graph_neighbors
 from app.services.mcp_catalog import tools_for_slug
 from app.services.mcp_executor import McpExecutionError, execute_mcp_tool
+from app.services.observability.tracing import span as trace_span
 from app.services.retrieval import BrainRetriever
 from app.services.settings_store import active_llm_provider_slug, resolve_openai
 from app.services.sql_safety import UnsafeSqlError, validate_read_only_sql
 from app.services.vector_store import vector_store
+
+
+async def _traced_chat_completion(
+    client: AsyncOpenAI,
+    *,
+    span_name: str,
+    model: str,
+    messages: list[dict[str, Any]] | Any,
+    **kwargs: Any,
+) -> Any:
+    """Wrap ``client.chat.completions.create`` in an llm-kind span.
+
+    Captures model, message count, and (when present on the SDK response)
+    prompt / completion / total token counts on the active chat trace. This
+    helper is a no-op outside a chat_trace context, so it's safe to use from
+    any caller — instrumentation degrades cleanly when no trace is open.
+    """
+    async with trace_span(
+        "llm",
+        span_name,
+        input={"messages_count": len(messages) if hasattr(messages, "__len__") else None},
+        model=model,
+    ) as sp:
+        completion = await client.chat.completions.create(model=model, messages=messages, **kwargs)
+        try:
+            choice = completion.choices[0]
+            message = choice.message
+            sp.set_output(
+                {
+                    "content_preview": (message.content or "")[:400] if hasattr(message, "content") else None,
+                    "tool_call_count": len(message.tool_calls or []) if hasattr(message, "tool_calls") else 0,
+                    "finish_reason": getattr(choice, "finish_reason", None),
+                }
+            )
+            usage = getattr(completion, "usage", None)
+            if usage is not None:
+                sp.set_usage(
+                    prompt_tokens=getattr(usage, "prompt_tokens", None),
+                    completion_tokens=getattr(usage, "completion_tokens", None),
+                    total_tokens=getattr(usage, "total_tokens", None),
+                )
+        except Exception:
+            # Never let span-bookkeeping mask a real LLM response.
+            logger.debug("llm_span_metadata_capture_failed", exc_info=True)
+        return completion
 
 logger = logging.getLogger("dataclaw.agents.chat")
 
@@ -2135,7 +2181,9 @@ async def _generate_chart_spec(
     if not rows:
         return None
     try:
-        completion = await client.chat.completions.create(
+        completion = await _traced_chat_completion(
+            client,
+            span_name="chart_spec",
             model=model,
             messages=[
                 {
@@ -3386,11 +3434,23 @@ async def answer_question(
     retrieval_warning: str | None = None
     if workspace:
         try:
-            brain_context = await BrainRetriever(session).retrieve(
-                workspace.id,
-                question,
-                connector_slugs=[connector_slug] if connector_slug else None,
-            )
+            async with trace_span(
+                "retrieval",
+                "brain_retrieve",
+                input={"question": question, "connector_slug": connector_slug},
+            ) as retrieval_sp:
+                brain_context = await BrainRetriever(session).retrieve(
+                    workspace.id,
+                    question,
+                    connector_slugs=[connector_slug] if connector_slug else None,
+                )
+                retrieval_sp.set_output(
+                    {
+                        "node_count": len(brain_context.nodes) if brain_context else 0,
+                        "chunk_count": len(brain_context.chunks) if brain_context else 0,
+                        "trace": getattr(brain_context, "trace", {}) if brain_context else {},
+                    }
+                )
         except Exception as exc:
             logger.warning("brain_retrieval_unavailable", extra={"_error": exc.__class__.__name__})
             brain_context = None
@@ -3626,7 +3686,9 @@ async def answer_question(
 
     try:
         await enforce_run_budget(session, run_id, estimated_tokens=_estimate_tokens(messages))
-        completion = await client.chat.completions.create(
+        completion = await _traced_chat_completion(
+            client,
+            span_name="chat_primary",
             model=selected_model,
             messages=messages,
             tools=openai_tools
@@ -3714,7 +3776,9 @@ async def answer_question(
                     ],
                 ]
                 try:
-                    next_completion = await client.chat.completions.create(
+                    next_completion = await _traced_chat_completion(
+                        client,
+                        span_name="chat_followup",
                         model=selected_model,
                         messages=followup_messages,
                         tools=openai_tools,
@@ -3746,7 +3810,9 @@ async def answer_question(
                             ],
                         ]
                         if result.get("status") != "pending_approval":
-                            final_completion = await client.chat.completions.create(
+                            final_completion = await _traced_chat_completion(
+                                client,
+                                span_name="chat_final_synthesis",
                                 model=selected_model,
                                 messages=followup_messages,
                             )

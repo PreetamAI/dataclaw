@@ -109,6 +109,7 @@ from app.services.mcp_executor import (
 )
 from app.services.mcp_servers import build_mcp_app, mcp_lifespan_contexts
 from app.services.observability.mocks import MOCK_EVENTS
+from app.services.observability.tracing import allocate_chat_message_id, chat_trace
 from app.services.settings_store import (
     get_llm_provider,
     hydrate_vector_store,
@@ -303,6 +304,16 @@ app.add_middleware(
     ],
 )
 
+# Phase 1 observability routers. Kept in dedicated modules so the
+# observability surface can grow without bloating this file further.
+from app.api.chat_traces import router as chat_traces_router  # noqa: E402
+from app.api.feedback import router as feedback_router  # noqa: E402
+from app.api.integrations import router as integrations_router  # noqa: E402
+
+app.include_router(feedback_router)
+app.include_router(integrations_router)
+app.include_router(chat_traces_router)
+
 
 @app.exception_handler(ChromaUnreachableError)
 async def _chroma_unreachable_handler(_request: Request, exc: ChromaUnreachableError) -> JSONResponse:
@@ -362,11 +373,22 @@ async def log_requests(request: Request, call_next):
 def _safe_http_error(message: str, exc: Exception, status_code: int = 400) -> HTTPException:
     correlation_id = uuid.uuid4().hex[:12]
     logger.exception(message, extra={"_correlation_id": correlation_id, "_error": exc.__class__.__name__})
+    # Pull a short, user-facing reason from the exception. SQL engines
+    # raise messages like "no such table: foo" / "syntax error near …"
+    # which the user can act on; we surface the first line of the cause
+    # (or fall back to the exception itself) and cap to keep the toast
+    # readable. Multi-line tracebacks stay in the log under correlation_id.
+    underlying = getattr(exc, "__cause__", None) or getattr(exc, "orig", None) or exc
+    raw_reason = str(underlying).splitlines()[0] if str(underlying) else ""
+    reason = raw_reason[:240] if raw_reason else (
+        "The operation failed. Check backend logs with the correlation_id for details."
+    )
     return HTTPException(
         status_code=status_code,
         detail={
             "message": message,
-            "detail": "The operation failed. Check backend logs with the correlation_id for details.",
+            "detail": f"{message} {reason}".strip() if raw_reason else reason,
+            "reason": raw_reason,
             "error_type": exc.__class__.__name__,
             "correlation_id": correlation_id,
         },
@@ -1550,6 +1572,7 @@ def _thread_payload(thread: ChatThread, messages: list[ChatMessage]) -> dict:
                 "chart_spec": message.chart_spec,
                 "action": message.action,
                 "retrieval_trace": message.retrieval_trace,
+                "trace_id": message.trace_id,
                 "created_at": message.created_at.isoformat(),
             }
             for message in messages
@@ -1689,20 +1712,37 @@ async def ide_chat(
         )
     engine = await _resolve_query_engine(request, session)
     owns_engine = engine is not request.app.state.query_engine
-    try:
-        response = await answer_question(
+    assistant_message_id = allocate_chat_message_id()
+    async with chat_trace(
+        session=session,
+        chat_message_id=assistant_message_id,
+        workspace_id=thread.workspace_id,
+        user_id=user.id,
+        thread_id=thread.id,
+        question=payload.question,
+    ) as trace:
+        try:
+            response = await answer_question(
+                session,
+                payload.question,
+                thread.id,
+                payload.model,
+                tool_engine=engine,
+                user_email=user.email,
+                connector_slug=payload.connector_slug,
+            )
+        finally:
+            if owns_engine:
+                await engine.dispose()
+        response = await _persist_chat_response(
             session,
-            payload.question,
-            thread.id,
-            payload.model,
-            tool_engine=engine,
-            user_email=user.email,
-            connector_slug=payload.connector_slug,
+            thread,
+            payload,
+            response,
+            assistant_message_id=assistant_message_id,
+            trace_id=trace.trace_id,
+            langfuse_url=trace.langfuse_url,
         )
-    finally:
-        if owns_engine:
-            await engine.dispose()
-    response = await _persist_chat_response(session, thread, payload, response)
     return response
 
 
@@ -1743,33 +1783,50 @@ async def _stream_ide_chat(
     yield _sse_frame("thread", {"thread_id": thread.id, "thread_title": thread.title, "run_id": run.id})
     engine = await _resolve_query_engine(request, session)
     owns_engine = engine is not request.app.state.query_engine
+    assistant_message_id = allocate_chat_message_id()
     try:
-        response = await answer_question(
-            session,
-            payload.question,
-            thread.id,
-            payload.model,
-            tool_engine=engine,
-            user_email=user.email,
-            connector_slug=payload.connector_slug,
-            run_id=run.id,
-        )
-        if response.get("tool_call") or response.get("tool_result"):
-            yield _sse_frame(
-                "tool_result",
-                {
-                    "tool_call": response.get("tool_call"),
-                    "status": response.get("status") or response.get("llm_status"),
-                    "result": response.get("tool_result"),
-                },
+        async with chat_trace(
+            session=session,
+            chat_message_id=assistant_message_id,
+            workspace_id=thread.workspace_id,
+            user_id=user.id,
+            thread_id=thread.id,
+            question=payload.question,
+        ) as trace:
+            response = await answer_question(
+                session,
+                payload.question,
+                thread.id,
+                payload.model,
+                tool_engine=engine,
+                user_email=user.email,
+                connector_slug=payload.connector_slug,
+                run_id=run.id,
             )
-        for chunk in _answer_chunks(str(response.get("answer") or "")):
-            if await _chat_run_cancelled(session, run.id):
-                await _mark_chat_run_cancelled(session, run)
-                yield _sse_frame("cancelled", {"run_id": run.id})
-                return
-            yield _sse_frame("delta", {"content": chunk})
-        response = await _persist_chat_response(session, thread, payload, response)
+            if response.get("tool_call") or response.get("tool_result"):
+                yield _sse_frame(
+                    "tool_result",
+                    {
+                        "tool_call": response.get("tool_call"),
+                        "status": response.get("status") or response.get("llm_status"),
+                        "result": response.get("tool_result"),
+                    },
+                )
+            for chunk in _answer_chunks(str(response.get("answer") or "")):
+                if await _chat_run_cancelled(session, run.id):
+                    await _mark_chat_run_cancelled(session, run)
+                    yield _sse_frame("cancelled", {"run_id": run.id})
+                    return
+                yield _sse_frame("delta", {"content": chunk})
+            response = await _persist_chat_response(
+                session,
+                thread,
+                payload,
+                response,
+                assistant_message_id=assistant_message_id,
+                trace_id=trace.trace_id,
+                langfuse_url=trace.langfuse_url,
+            )
         await _mark_chat_run_completed(session, run, response.get("answer", ""))
         yield _sse_frame("done", response)
     except Exception as exc:
@@ -1850,6 +1907,10 @@ async def _persist_chat_response(
     thread: ChatThread,
     payload: ChatRequest,
     response: dict[str, Any],
+    *,
+    assistant_message_id: str | None = None,
+    trace_id: str | None = None,
+    langfuse_url: str | None = None,
 ) -> dict[str, Any]:
     citations = list(response.get("citations") or [])
     # Stash the connector+tool that produced this answer so follow-up turns
@@ -1863,25 +1924,34 @@ async def _persist_chat_response(
             "tool": tool_call.get("tool"),
         })
     user_message = ChatMessage(thread_id=thread.id, role="user", content=payload.question)
-    assistant_message = ChatMessage(
-        thread_id=thread.id,
-        role="assistant",
-        content=response.get("answer", ""),
-        sql=response.get("sql"),
-        provider=response.get("provider"),
-        llm_status=response.get("llm_status"),
-        citations=citations,
-        rows=response.get("rows") or [],
-        chart_spec=response.get("chart_spec"),
-        action=response.get("action"),
-        retrieval_trace=response.get("retrieval_trace") or {},
-    )
+    assistant_kwargs: dict[str, Any] = {
+        "thread_id": thread.id,
+        "role": "assistant",
+        "content": response.get("answer", ""),
+        "sql": response.get("sql"),
+        "provider": response.get("provider"),
+        "llm_status": response.get("llm_status"),
+        "citations": citations,
+        "rows": response.get("rows") or [],
+        "chart_spec": response.get("chart_spec"),
+        "action": response.get("action"),
+        "retrieval_trace": response.get("retrieval_trace") or {},
+        "trace_id": trace_id,
+    }
+    if assistant_message_id is not None:
+        assistant_kwargs["id"] = assistant_message_id
+    assistant_message = ChatMessage(**assistant_kwargs)
     session.add_all([user_message, assistant_message])
     if thread.title in {"New conversation", ""}:
         thread.title = payload.question.strip()[:80] or thread.title
     await session.commit()
     response["thread_id"] = thread.id
     response["thread_title"] = thread.title
+    response["message_id"] = assistant_message.id
+    if trace_id is not None:
+        response["trace_id"] = trace_id
+    if langfuse_url is not None:
+        response["langfuse_url"] = langfuse_url
     return response
 
 

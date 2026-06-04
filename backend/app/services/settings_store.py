@@ -12,6 +12,57 @@ def _llm_key(slug: str) -> str:
     return f"llm:{slug}"
 
 
+def _observability_key(slug: str) -> str:
+    return f"observability:{slug}"
+
+
+# Catalog of optional observability integrations. Keeping this inline (rather
+# than a separate registry module) until we add more than one provider — the
+# field shape mirrors LlmCatalogItem so the frontend can reuse ConfigureModal.
+OBSERVABILITY_CATALOG: dict[str, dict[str, Any]] = {
+    "langfuse": {
+        "slug": "langfuse",
+        "display_name": "Langfuse",
+        "docs_url": "https://langfuse.com/docs/tracing",
+        "description": (
+            "Optional secondary trace sink. Chat traces are always written to the "
+            "local span store; enabling Langfuse forwards them to a Langfuse "
+            "Cloud or self-hosted project for richer trace exploration."
+        ),
+        "fields": [
+            {
+                "name": "host",
+                "label": "Host",
+                "secret": False,
+                "required": True,
+                "placeholder": "https://cloud.langfuse.com",
+            },
+            {
+                "name": "public_key",
+                "label": "Public key",
+                "secret": False,
+                "required": True,
+                "placeholder": "pk-lf-...",
+            },
+            {
+                "name": "secret_key",
+                "label": "Secret key",
+                "secret": True,
+                "required": True,
+                "placeholder": "sk-lf-...",
+            },
+            {
+                "name": "project",
+                "label": "Project ID",
+                "secret": False,
+                "required": False,
+                "placeholder": "cm... (Settings → General → Debug → project.id in Langfuse)",
+            },
+        ],
+    },
+}
+
+
 async def _read(session: AsyncSession, key: str) -> dict[str, Any]:
     row = await session.get(AppSetting, key)
     if row is None:
@@ -90,6 +141,45 @@ async def resolve_openai(session: AsyncSession) -> tuple[str | None, str | None,
     model = (stored.get("model") or settings.openai_model) if api_key else None
     embedding_model = stored.get("embedding_model") or definition.default_embedding_model
     return api_key, model, stored.get("base_url"), embedding_model
+
+
+async def get_observability_provider(session: AsyncSession, slug: str) -> dict[str, Any]:
+    return await _read(session, _observability_key(slug))
+
+
+async def list_observability_providers(session: AsyncSession) -> dict[str, dict[str, Any]]:
+    return {slug: await _read(session, _observability_key(slug)) for slug in OBSERVABILITY_CATALOG}
+
+
+async def update_observability_provider(
+    session: AsyncSession,
+    slug: str,
+    values: dict[str, Any],
+) -> AppSetting:
+    if slug not in OBSERVABILITY_CATALOG:
+        raise KeyError(slug)
+    current = await _read(session, _observability_key(slug))
+    field_names = {field["name"] for field in OBSERVABILITY_CATALOG[slug]["fields"]}
+    field_names.add("enabled")  # toggle without re-entering credentials
+    for name in field_names:
+        if name not in values:
+            continue
+        incoming = values[name]
+        if incoming is None or incoming is False:
+            if name == "enabled":
+                current["enabled"] = False
+            else:
+                current.pop(name, None)
+            continue
+        if isinstance(incoming, bool):
+            current[name] = incoming
+            continue
+        stripped = str(incoming).strip()
+        if stripped:
+            current[name] = stripped
+        else:
+            current.pop(name, None)
+    return await _write(session, _observability_key(slug), current)
 
 
 async def hydrate_vector_store(session: AsyncSession, workspace_id: str) -> None:

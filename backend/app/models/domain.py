@@ -291,6 +291,9 @@ class ChatThread(IdMixin, TimestampMixin, Base):
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     title: Mapped[str] = mapped_column(String(255), default="New conversation")
+    # kind segregates user-driven threads from synthetic eval/scheduled threads
+    # so background eval runs don't pollute the Sessions sidebar.
+    kind: Mapped[str] = mapped_column(String(20), default="user", index=True)
     archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     messages: Mapped[list["ChatMessage"]] = relationship(
@@ -314,7 +317,62 @@ class ChatMessage(IdMixin, TimestampMixin, Base):
     chart_spec: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     action: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     retrieval_trace: Mapped[dict] = mapped_column(JSON, default=dict)
+    # trace_id is the deterministic Langfuse trace id derived from this row's
+    # uuid; populated for assistant messages produced through the traced chat
+    # path. Also used as the join key for chat_spans rows.
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     thread: Mapped[ChatThread] = relationship(back_populates="messages")
+
+
+class ChatSpan(IdMixin, Base):
+    """Hierarchical span for a single chat turn. Mirrors Langfuse's shape so
+    rows can be replayed into Langfuse later if a workspace enables it after
+    the fact. Always-on local sink; Langfuse is the optional secondary sink.
+    """
+
+    __tablename__ = "chat_spans"
+
+    chat_message_id: Mapped[str] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True
+    )
+    parent_span_id: Mapped[str | None] = mapped_column(
+        ForeignKey("chat_spans.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # kind: retrieval | llm | tool | sql | root
+    kind: Mapped[str] = mapped_column(String(20), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(20), default="ok")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    input: Mapped[dict] = mapped_column(JSON, default=dict)
+    output: Mapped[dict] = mapped_column(JSON, default=dict)
+    span_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+    usage: Mapped[dict] = mapped_column(JSON, default=dict)
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Feedback(IdMixin, TimestampMixin, Base):
+    """User reaction to an assistant message. The primary feedback signal we
+    later turn into evaluation cases (👎 → corrected expected; 👍 → regression
+    eval candidate). Forwarded to Langfuse as a trace score if enabled.
+    """
+
+    __tablename__ = "feedback"
+
+    chat_message_id: Mapped[str] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # sentiment: positive | negative
+    sentiment: Mapped[str] = mapped_column(String(20), index=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    langfuse_score_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # set once the feedback has been promoted to an eval case (Phase 2)
+    eval_case_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class AgentWriteAudit(IdMixin, Base):
