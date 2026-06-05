@@ -1,30 +1,34 @@
-import asyncio
-import json
-import logging
-import os
-import uuid
-from contextlib import AsyncExitStack, asynccontextmanager
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from time import perf_counter
-from typing import Any
+# Merge ~/.dataclaw/.env into os.environ BEFORE any module imports `get_settings()`.
+# `app.db.session` calls it at module-load time and caches the result via lru_cache,
+# so this must run before `from app.api.deps import ...` pulls that module in.
+# Existing process env (Docker -e, CI secrets) still wins via setdefault().
+from app.core.config import load_env_file  # noqa: E402
 
-import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, text, update
-from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-
-from app.api.deps import current_user, require_admin
-from app.core.config import get_settings, load_env_file
-
-# Merge ~/.dataclaw/.env into os.environ before Settings() is constructed.
-# Existing process env (Docker -e, CI secrets) wins via setdefault().
 load_env_file()
+
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import os  # noqa: E402
+import uuid  # noqa: E402
+from contextlib import AsyncExitStack, asynccontextmanager  # noqa: E402
+from datetime import UTC, datetime, timedelta  # noqa: E402
+from pathlib import Path  # noqa: E402
+from time import perf_counter  # noqa: E402
+from typing import Any  # noqa: E402
+
+import httpx  # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
+from sqlalchemy import func, or_, select, text, update  # noqa: E402
+from sqlalchemy.engine import make_url  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E402
+
+from app.api.deps import current_user, require_admin  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
 
 from app.core.logging import configure_logging, run_log_drainer  # noqa: E402
 from app.core.security import (
