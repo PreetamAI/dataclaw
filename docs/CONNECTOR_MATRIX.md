@@ -24,7 +24,7 @@ See [Stability Tiers](./stability-tiers.md) for the policy behind each tier.
 | `databricks` | Data store | 🟢 Stable | Credential required | ✅ 13 | ✅ 8 | - | Live Databricks warehouse reads and approval-gated SQL execution passed against the configured SQL warehouse. |
 | `mysql` | Data store | 🟢 Stable | Credential required | ✅ 13 | ✅ 8 | - | Integration-tested via docker-compose mysql:8.0. |
 | `postgres` | Data store | 🟢 Stable | Demo | ✅ 13 | ✅ 8 | - | DDL (CREATE TABLE) and DML (INSERT) executed end-to-end via chat; approval gate + AgentWriteAudit confirmed. |
-| `redshift` | Data store | 🔴 Known issue | Credential required | ✅ 16 | ✅ 10 | psycopg3 raises 'codec not available: UNICODE' on Redshift's `select pg_catalog.version()` probe - auth + network are fine, version detection is broken (#redshift-psycopg3-codec) | Adapter present and routes correctly; first SQL call fails. Fix: use psycopg2 driver or skip version probe. |
+| `redshift` | Data store | 🟡 Beta | Credential required | ✅ 16 | ✅ 10 | - | psycopg3 UNICODE codec aliased at adapter import time; live SELECT verified against Redshift Serverless. Live read/write E2E pending. |
 | `snowflake` | Data store | 🟢 Stable | Credential required | ✅ 19 | ✅ 11 | - | Live Snowflake read/write E2E passed with explicit warehouse context, approval gate, approved execution, verification, and cleanup. |
 | `sql_server` | Data store | 🟢 Stable | Credential required | ✅ 13 | ✅ 8 | - | Integration-tested via docker-compose mssql:2022. |
 | `sqlite` | Data store | 🟢 Stable | Real | ✅ 10 | ✅ 7 | - | Built-in demo seeded at startup; read/write fully covered. |
@@ -35,7 +35,7 @@ See [Stability Tiers](./stability-tiers.md) for the policy behind each tier.
 | `notion` | Knowledge base | 🟢 Stable | Credential required | ✅ 7 | ✅ 7 | - | Acme coverage shard passed 5/5 runs with read_ and write_ tool fixtures exercised against seeded Notion data. |
 | `quip` | Knowledge base | 🚫 Unsupported | Credential required | ✅ 6 | ✅ 5 | Quip was discontinued by Salesforce in 2024 - no new integration tokens can be created | Adapter retained for back-compat with existing Quip configs only. |
 | `airbyte` | ETL/orchestration | 🟢 Stable | Real | ✅ 10 | ✅ 7 | - | Acme coverage shard passed 5/5 runs with read_ and write_ tool fixtures exercised against seeded Airbyte data. |
-| `airflow` | ETL/orchestration | 🟡 Beta | Real | ✅ 13 | ✅ 10 | Airflow sandbox containers occasionally fail to fetch configuration on first boot. Re-run usually clears it; tracked in the roadmap. | Fixture-backed DAG reads/source/logs plus trigger/pause/create writes passed with approval gates; live-API E2E pending. |
+| `airflow` | ETL/orchestration | 🟡 Beta | Real | ✅ 13 | ✅ 10 | - | Fixture-backed DAG reads/source/logs plus trigger/pause/create writes passed with approval gates; first-boot flake mitigated by adapter-level retry (2 attempts, 1s + 3s backoff). |
 | `dagster` | ETL/orchestration | 🟢 Stable | Real | ✅ 13 | ✅ 7 | - | Acme coverage shard passed 5/5 runs with read_ and write_ tool fixtures exercised against seeded Dagster data. |
 | `dbt` | ETL/orchestration | 🟢 Stable | Real | ✅ 12 | ✅ 7 | - | Acme coverage shard passed 5/5 runs with read_ and write_ tool fixtures exercised against seeded dbt data. |
 | `fivetran` | ETL/orchestration | 🔵 Stable (read-only) | Real | ✅ 9 | ✅ 6 | write_trigger_sync is approval-gated but not executed by design for the read-only tier | Live Fivetran list connectors and sync-history reads passed; trigger-sync returned pending approval and was not executed. |
