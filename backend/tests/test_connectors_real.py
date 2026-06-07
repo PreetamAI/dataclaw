@@ -21,6 +21,12 @@ from app.services.connectors.adapters import (
 )
 
 
+def _underlying(adapter):
+    # adapter_for() wraps every adapter in _RetryingAdapter; tests check the
+    # concrete implementation behind the wrapper.
+    return getattr(adapter, "_inner", adapter)
+
+
 @pytest.mark.parametrize(
     "slug, expected",
     [
@@ -33,7 +39,7 @@ from app.services.connectors.adapters import (
     ],
 )
 def test_factory_returns_real_adapter(slug: str, expected: type) -> None:
-    adapter = adapter_for(slug)
+    adapter = _underlying(adapter_for(slug))
     assert isinstance(adapter, expected), f"{slug} resolved to {type(adapter).__name__}"
     assert not isinstance(adapter, CredentialRequiredAdapter)
 
@@ -43,7 +49,7 @@ def test_no_catalog_slug_falls_through_to_credential_required() -> None:
 
     fallthroughs: list[str] = []
     for slug in CATALOG_BY_SLUG:
-        adapter = adapter_for(slug)
+        adapter = _underlying(adapter_for(slug))
         if isinstance(adapter, CredentialRequiredAdapter) and slug not in {"quip", "confluence", "fivetran"}:
             fallthroughs.append(slug)
     assert fallthroughs == [], f"Catalog entries with no real adapter: {fallthroughs}"
@@ -208,6 +214,15 @@ def test_snowflake_adapter_accepts_private_key_without_password(monkeypatch: pyt
     monkeypatch.setitem(sys.modules, "snowflake", snowflake_module)
     monkeypatch.setitem(sys.modules, "snowflake.connector", connector_module)
     monkeypatch.setitem(sys.modules, "cryptography.hazmat.primitives.serialization", serialization_module)
+    # The adapter does `from cryptography.hazmat.primitives import serialization`,
+    # which is an attribute lookup on the parent. If a prior test in the suite
+    # already imported the real `cryptography.hazmat.primitives` package, the
+    # parent's `serialization` attribute is bound to the real submodule and
+    # `monkeypatch.setitem(sys.modules, ...)` alone won't redirect the import.
+    # Patch the parent's attribute too when it's already loaded.
+    _primitives = sys.modules.get("cryptography.hazmat.primitives")
+    if _primitives is not None:
+        monkeypatch.setattr(_primitives, "serialization", serialization_module, raising=False)
 
     conn = SnowflakeAdapter()._connect(
         {
@@ -269,6 +284,15 @@ async def test_snowflake_adapter_test_accepts_private_key_without_password(monke
     monkeypatch.setitem(sys.modules, "snowflake", snowflake_module)
     monkeypatch.setitem(sys.modules, "snowflake.connector", connector_module)
     monkeypatch.setitem(sys.modules, "cryptography.hazmat.primitives.serialization", serialization_module)
+    # The adapter does `from cryptography.hazmat.primitives import serialization`,
+    # which is an attribute lookup on the parent. If a prior test in the suite
+    # already imported the real `cryptography.hazmat.primitives` package, the
+    # parent's `serialization` attribute is bound to the real submodule and
+    # `monkeypatch.setitem(sys.modules, ...)` alone won't redirect the import.
+    # Patch the parent's attribute too when it's already loaded.
+    _primitives = sys.modules.get("cryptography.hazmat.primitives")
+    if _primitives is not None:
+        monkeypatch.setattr(_primitives, "serialization", serialization_module, raising=False)
 
     result = await SnowflakeAdapter().test(
         {

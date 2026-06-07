@@ -605,8 +605,10 @@ async def _fivetran_get_connection(client: httpx.AsyncClient, base_url: str, hea
 
 
 async def _graphql(client: httpx.AsyncClient, base_url: str, headers: dict[str, str], query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+    # `base_url` is already the GraphQL endpoint (DagsterAdapter.base_url
+    # normalizes both Cloud and OSS URLs to end in `/graphql`).
     response = await client.post(
-        f"{base_url}/graphql",
+        base_url,
         headers=headers,
         json={"query": query, "variables": variables or {}},
     )

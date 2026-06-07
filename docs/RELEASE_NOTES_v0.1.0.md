@@ -15,7 +15,7 @@ Browser opens at `http://127.0.0.1:8000`. The SQLite demo connector is pre-confi
 For multi-container deployments:
 
 ```bash
-git clone https://github.com/saivangapally81/dataclaw.git
+git clone https://github.com/svangapally81/dataclaw.git
 cd dataclaw
 cp .env.example .env
 

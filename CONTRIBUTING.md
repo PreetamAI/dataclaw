@@ -25,7 +25,7 @@ dataclaw start
 Source development:
 
 ```bash
-git clone https://github.com/saivangapally81/dataclaw.git
+git clone https://github.com/svangapally81/dataclaw.git
 cd dataclaw
 make install
 make dev

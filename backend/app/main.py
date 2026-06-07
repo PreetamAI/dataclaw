@@ -141,6 +141,40 @@ def _mcp_stream_mounts_enabled() -> bool:
     return True
 
 
+def _resolve_build_info() -> dict[str, str]:
+    """Identify the running code so logs/health reflect what's actually executing.
+
+    Order: explicit env (DATACLAW_GIT_SHA), git rev-parse in the install dir,
+    installed package version. Resolved once at import.
+    """
+    import subprocess  # local import keeps module cold path small
+    from importlib import metadata as _metadata
+
+    sha = os.environ.get("DATACLAW_GIT_SHA", "").strip()
+    if not sha:
+        try:
+            repo_root = Path(__file__).resolve().parents[2]
+            result = subprocess.run(
+                ["git", "-C", str(repo_root), "rev-parse", "--short=12", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if result.returncode == 0:
+                sha = result.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            sha = ""
+    try:
+        version = _metadata.version("dataclaw-platform")
+    except _metadata.PackageNotFoundError:
+        version = "source"
+    return {"commit": sha or "unknown", "version": version}
+
+
+BUILD_INFO = _resolve_build_info()
+
+
 def _seed_file_backed_demo_sqlite(database_url: str) -> None:
     url = make_url(database_url)
     if not url.drivername.startswith("sqlite") or not url.database or url.database == ":memory:":
@@ -189,6 +223,8 @@ async def lifespan(app: FastAPI):
             "_environment": settings.environment,
             "_demo_mode": settings.demo_mode,
             "_openai_configured": bool(settings.openai_api_key),
+            "_commit": BUILD_INFO["commit"],
+            "_version": BUILD_INFO["version"],
         },
     )
     _warn_if_low_ollama_memory()
@@ -207,6 +243,19 @@ async def lifespan(app: FastAPI):
         logger.info("test_schema_bootstrap_complete")
     async for session in get_session():
         await seed_demo(session)
+        # Reap stale claims: any sync_state='syncing' row at boot is from a
+        # process that was killed mid-sync — the task is gone, the claim isn't.
+        reaped = await session.execute(
+            update(Connector)
+            .where(Connector.sync_state == "syncing")
+            .values(
+                sync_state="sync_failed",
+                last_sync_error="Previous sync was interrupted by a restart.",
+            )
+        )
+        if reaped.rowcount:
+            logger.warning("stale_sync_claims_reaped", extra={"_count": reaped.rowcount})
+            await session.commit()
     worker_scheduler = None
     if settings.embedded_worker and not ("PYTEST_CURRENT_TEST" in os.environ and os.getenv("ENABLE_EMBEDDED_WORKER_IN_TESTS") != "1"):
         from app.worker.main import start_scheduler
@@ -372,6 +421,8 @@ async def health() -> dict:
         "status": "ok",
         "app": settings.app_name,
         "openai_configured": bool(settings.openai_api_key),
+        "commit": BUILD_INFO["commit"],
+        "version": BUILD_INFO["version"],
     }
 
 
@@ -670,15 +721,78 @@ async def test_connector(
     return result.model_dump()
 
 
+async def _run_connector_sync(slug: str, connector_id: str, credentials: dict) -> None:
+    """Execute a sync on its own session. Always finalizes sync_state.
+
+    Used by both the synchronous default path and the opt-in background path.
+    Runs on a fresh session so a `PendingRollbackError` from a failed flush
+    cannot prevent the terminal `sync_failed` state from being recorded.
+    """
+    from app.db.session import SessionLocal
+
+    final_error: str | None = None
+    try:
+        result = await adapter_for(slug).sync(credentials)
+        async with SessionLocal() as session:
+            try:
+                connector = await session.get(Connector, connector_id)
+                if connector is None:
+                    return
+                api_key, _model, base_url, embedding_model = await resolve_openai(session)
+                vector_store.ensure_embedding_model(
+                    connector.workspace_id, embedding_model, api_key=api_key, base_url=base_url
+                )
+                await materialize_sync(session, connector, result)
+                ingestion = await IngestionService(session).ingest_connector(connector, credentials)
+                connector.sync_summary = {**result, "ingestion": ingestion.model_dump()}
+                connector.status = result.get("mode", connector.status)
+                connector.sync_state = "synced"
+                connector.last_synced_at = datetime.now(UTC)
+                await session.commit()
+                return
+            except Exception:
+                await session.rollback()
+                raise
+    except Exception as exc:
+        final_error = f"{exc.__class__.__name__}: {exc}"
+        logger.exception(
+            "connector_sync_failed",
+            extra={"_slug": slug, "_connector_id": connector_id, "_error": exc.__class__.__name__},
+        )
+
+    try:
+        async with SessionLocal() as finalize:
+            await finalize.execute(
+                update(Connector)
+                .where(Connector.id == connector_id)
+                .values(sync_state="sync_failed", last_sync_error=final_error or "Sync failed.")
+            )
+            await finalize.commit()
+    except Exception:
+        logger.exception(
+            "connector_sync_finalize_failed",
+            extra={"_slug": slug, "_connector_id": connector_id},
+        )
+
+
 @app.post("/connectors/{slug}/sync")
-async def sync_connector(slug: str, session: AsyncSession = Depends(get_session), user: User = Depends(require_admin)):
+async def sync_connector(
+    slug: str,
+    response: Response,
+    background: bool = False,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_admin),
+):
     from cryptography.fernet import InvalidToken
 
     if slug not in CATALOG_BY_SLUG:
         raise HTTPException(status_code=404, detail="Unknown connector.")
     connector = await session.scalar(select(Connector).where(Connector.slug == slug))
+    if connector is None:
+        raise HTTPException(status_code=404, detail="Connector is not configured.")
+
     credentials: dict = {}
-    if connector and connector.encrypted_credentials:
+    if connector.encrypted_credentials:
         try:
             credentials = decrypt_json(settings.master_key, connector.encrypted_credentials)
         except InvalidToken as exc:
@@ -688,42 +802,44 @@ async def sync_connector(slug: str, session: AsyncSession = Depends(get_session)
                 "Click Configure to re-enter credentials, or restore the original MASTER_KEY."
             )
             await session.commit()
-            raise HTTPException(
-                status_code=409,
-                detail=connector.last_sync_error,
-            ) from exc
-    if connector:
-        claimed = await session.execute(
-            update(Connector)
-            .where(Connector.id == connector.id, Connector.sync_state != "syncing")
-            .values(sync_state="syncing", last_sync_error=None)
-        )
-        if claimed.rowcount == 0:
-            raise HTTPException(status_code=409, detail="Connector sync is already running.")
-        await session.commit()
-        await session.refresh(connector)
-    try:
-        result = await adapter_for(slug).sync(credentials)
-        if connector:
-            connector.sync_summary = result
-            connector.status = result.get("mode", connector.status)
-            api_key, _model, base_url, embedding_model = await resolve_openai(session)
-            vector_store.ensure_embedding_model(connector.workspace_id, embedding_model, api_key=api_key, base_url=base_url)
-            await materialize_sync(session, connector, result)
-            ingestion = await IngestionService(session).ingest_connector(connector, credentials)
-            connector.sync_summary = {**result, "ingestion": ingestion.model_dump()}
-            connector.sync_state = "synced"
-            connector.last_synced_at = datetime.now(UTC)
-    except Exception as exc:
-        if connector:
-            connector.sync_state = "sync_failed"
-            connector.last_sync_error = f"{exc.__class__.__name__}: {exc}"
-            await session.commit()
-        if isinstance(exc, ChromaUnreachableError):
-            raise
-        raise _safe_http_error("Sync failed.", exc) from exc
+            raise HTTPException(status_code=409, detail=connector.last_sync_error) from exc
+
+    claimed = await session.execute(
+        update(Connector)
+        .where(Connector.id == connector.id, Connector.sync_state != "syncing")
+        .values(sync_state="syncing", last_sync_error=None)
+    )
+    if claimed.rowcount == 0:
+        raise HTTPException(status_code=409, detail="Connector sync is already running.")
     await session.commit()
-    return connector.sync_summary if connector else result
+
+    connector_id = connector.id
+
+    if background:
+        # Opt-in async path for long-running connectors. Returns 202; clients
+        # poll GET /connectors/{slug} for terminal state.
+        asyncio.create_task(
+            _run_connector_sync(slug, connector_id, credentials),
+            name=f"connector-sync:{slug}",
+        )
+        response.status_code = 202
+        return {
+            "sync_state": "syncing",
+            "slug": slug,
+            "connector_id": connector_id,
+            "poll_url": f"/connectors/{slug}",
+        }
+
+    # Default: run inline, return 200 with the sync summary. Matches the
+    # pre-2026-06 behavior the UI and existing tests/CLIs depend on.
+    await _run_connector_sync(slug, connector_id, credentials)
+    await session.refresh(connector)
+    if connector.sync_state == "sync_failed":
+        raise _safe_http_error(
+            "Sync failed.",
+            RuntimeError(connector.last_sync_error or "Sync failed."),
+        )
+    return connector.sync_summary or {"sync_state": connector.sync_state, "slug": slug}
 
 
 AGENT_RUNNERS = {
@@ -1735,6 +1851,17 @@ async def _persist_chat_response(
     payload: ChatRequest,
     response: dict[str, Any],
 ) -> dict[str, Any]:
+    citations = list(response.get("citations") or [])
+    # Stash the connector+tool that produced this answer so follow-up turns
+    # can cite it factually instead of guessing (was: "which connector did
+    # that run against?" hallucinating PostgreSQL after a SQLite call).
+    tool_call = response.get("tool_call")
+    if isinstance(tool_call, dict) and tool_call.get("connector_slug"):
+        citations.insert(0, {
+            "type": "tool_call_provenance",
+            "connector": tool_call.get("connector_slug"),
+            "tool": tool_call.get("tool"),
+        })
     user_message = ChatMessage(thread_id=thread.id, role="user", content=payload.question)
     assistant_message = ChatMessage(
         thread_id=thread.id,
@@ -1743,7 +1870,7 @@ async def _persist_chat_response(
         sql=response.get("sql"),
         provider=response.get("provider"),
         llm_status=response.get("llm_status"),
-        citations=response.get("citations") or [],
+        citations=citations,
         rows=response.get("rows") or [],
         chart_spec=response.get("chart_spec"),
         action=response.get("action"),
@@ -1763,11 +1890,18 @@ async def _resolve_query_engine(
     session: AsyncSession,
     connector_slug: str | None = None,
 ):
-    slug = connector_slug or "postgres"
-    if slug not in {"postgres", "mysql", "redshift", "trino", "sqlite"}:
-        if connector_slug:
-            raise HTTPException(status_code=400, detail=f"Connector {connector_slug} is not supported for /ide/query.")
+    # When no connector_slug is provided ("Auto source"), return the demo
+    # engine. The MCP dispatcher gives this engine to SQLite tool calls; for
+    # postgres/mysql/redshift the dispatcher builds its own per-connector engine
+    # (see _sql_datastore_tool in mcp_executor.py), so the default only matters
+    # for the SQLite path. Defaulting to "postgres" used to build a Postgres
+    # engine that then poisoned SQLite tool calls with "relation does not
+    # exist" errors.
+    if connector_slug is None:
         return request.app.state.query_engine
+    slug = connector_slug
+    if slug not in {"postgres", "mysql", "redshift", "trino", "sqlite"}:
+        raise HTTPException(status_code=400, detail=f"Connector {connector_slug} is not supported for /ide/query.")
     connector = await session.scalar(select(Connector).where(Connector.slug == slug))
     if slug == "sqlite":
         if connector and connector.sync_summary:

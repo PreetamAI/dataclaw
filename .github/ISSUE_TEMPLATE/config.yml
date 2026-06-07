@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/dataclaw/dataclaw/security/advisories/new
+    url: https://github.com/svangapally81/dataclaw/security/advisories/new
     about: Please report suspected vulnerabilities privately.
   - name: Documentation
-    url: https://github.com/dataclaw/dataclaw/issues/new?template=feature_request.md
+    url: https://github.com/svangapally81/dataclaw/issues/new?template=feature_request.md
     about: Use the feature request template for docs improvements.

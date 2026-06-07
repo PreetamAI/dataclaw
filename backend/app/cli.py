@@ -14,6 +14,10 @@ Commands:
     dataclaw mcp verify     verify MCP catalog executors
     dataclaw rotate-master-key
                             re-encrypt stored secrets with a new master key
+    dataclaw secrets import <file>
+                            load connector credentials from a local JSON file
+                            so secrets don't have to be pasted through chat
+                            or other untrusted channels
 """
 from __future__ import annotations
 
@@ -500,6 +504,75 @@ def cmd_rotate_master_key(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _import_secrets(path: Path, dry_run: bool) -> int:
+    from sqlalchemy import select
+
+    from app.core.config import get_settings
+    from app.core.security import encrypt_json
+    from app.db.session import SessionLocal
+    from app.models.domain import Connector
+    from app.services.connectors.adapters import adapter_for
+    from app.services.connectors.catalog import CATALOG_BY_SLUG
+
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        print(f"Invalid JSON in {path}: {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(payload, dict):
+        print(f"{path} must be a JSON object keyed by connector slug.", file=sys.stderr)
+        return 1
+
+    unknown = [slug for slug in payload if slug not in CATALOG_BY_SLUG]
+    if unknown:
+        print(f"Unknown connector slug(s): {', '.join(sorted(unknown))}", file=sys.stderr)
+        return 1
+
+    settings = get_settings()
+    failures = 0
+    async with SessionLocal() as session:
+        for slug, creds in payload.items():
+            if not isinstance(creds, dict):
+                print(f"  {slug}: credentials must be a JSON object — skipped", file=sys.stderr)
+                failures += 1
+                continue
+            try:
+                result = await adapter_for(slug).test(creds)
+            except Exception as exc:
+                print(f"  {slug}: {type(exc).__name__}: {exc}", file=sys.stderr)
+                failures += 1
+                continue
+            print(f"  {slug}: test {result.status} — {result.message}")
+            if result.status != "ok":
+                failures += 1
+                continue
+            if dry_run:
+                continue
+            connector = await session.scalar(select(Connector).where(Connector.slug == slug))
+            if connector is None:
+                print(
+                    f"    {slug}: no connector row exists yet — start DataClaw once to seed it.",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
+            connector.encrypted_credentials = encrypt_json(settings.master_key, creds)
+            connector.credential_state = "configured"
+            connector.status = result.status
+            connector.last_test_message = result.message
+        if not dry_run:
+            await session.commit()
+    return 1 if failures else 0
+
+
+def cmd_secrets_import(args: argparse.Namespace) -> int:
+    path = Path(args.path)
+    if not path.exists():
+        print(f"{path} does not exist", file=sys.stderr)
+        return 1
+    return asyncio.run(_import_secrets(path, args.dry_run))
+
+
 async def _dump(path: Path) -> None:
     from sqlalchemy import select
 
@@ -630,6 +703,22 @@ def main(argv: list[str] | None = None) -> int:
 
     p_rotate = sub.add_parser("rotate-master-key", help="re-encrypt stored secrets with a new master key")
     p_rotate.set_defaults(func=cmd_rotate_master_key)
+
+    p_secrets = sub.add_parser("secrets", help="manage connector credentials")
+    secrets_sub = p_secrets.add_subparsers(dest="secrets_cmd", required=True)
+    p_secrets_import = secrets_sub.add_parser(
+        "import",
+        help="load connector credentials from a local JSON file",
+        description=(
+            "Read a JSON file shaped like {\"slug\": {credential_fields}} and "
+            "test+persist each entry. Avoids pasting secrets through untrusted "
+            "channels. Run while DataClaw is stopped or accept normal SQLite "
+            "concurrency."
+        ),
+    )
+    p_secrets_import.add_argument("path", help="path to the JSON file")
+    p_secrets_import.add_argument("--dry-run", action="store_true", help="test connections without persisting")
+    p_secrets_import.set_defaults(func=cmd_secrets_import)
 
     p_dump = sub.add_parser("dump", help="write a conservative JSON backup")
     p_dump.add_argument("path")

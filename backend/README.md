@@ -10,4 +10,4 @@ dataclaw start
 
 Use Docker Compose from the repository root for the production-style local stack with a dedicated Chroma service and separate worker container.
 
-Source repo: <https://github.com/saivangapally81/dataclaw>
+Source repo: <https://github.com/svangapally81/dataclaw>

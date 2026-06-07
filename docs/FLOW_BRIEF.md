@@ -108,4 +108,4 @@ Operator clicks **Approve** in Gateway → `POST /alerts/{id}/approve-and-execut
 ## Sairam-side blockers (one liner each)
 
 1. **Redshift**: open security group ingress for tester IPs on `default-workgroup.203358432634.us-east-1:5439` (or share VPC peering).
-2. **GitHub PAT mismatch**: rotate PAT to own `saivangapally81/dataclaw`, OR update `api_tokens.txt` + `docs/TESTER_GUIDE.md` to point at `ShandilyaPeddi/dataclaw-ci`.
+2. **GitHub PAT mismatch**: rotate PAT to own `svangapally81/dataclaw`, OR update `api_tokens.txt` + `docs/TESTER_GUIDE.md` to point at `ShandilyaPeddi/dataclaw-ci`.
