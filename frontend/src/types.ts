@@ -312,6 +312,8 @@ export type ChatRequest = {
 export type ChatCitation = {
   title: string;
   connector: string;
+  type?: string;
+  tool?: string;
   path?: string;
 };
 

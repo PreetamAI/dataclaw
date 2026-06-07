@@ -514,6 +514,7 @@ function ChatBubble({
       </div>
     );
   }
+  const visibleCitations = message.citations.filter((citation) => citation.type !== "tool_call_provenance");
   return (
     <div className="bubble assistant">
       {message.provider ? (
@@ -563,9 +564,9 @@ function ChatBubble({
           </table>
         </div>
       ) : null}
-      {message.citations.length > 0 ? (
+      {visibleCitations.length > 0 ? (
         <div className="bubble-citations">
-          {message.citations.map((citation, index) => (
+          {visibleCitations.map((citation, index) => (
             citation.path ? (
               <button key={`${citation.path}-${index}`} onClick={() => onCitationClick(citation)} type="button">
                 {citation.title} <em>({citation.connector})</em>
