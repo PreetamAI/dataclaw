@@ -2,7 +2,7 @@ BACKEND_RUN = sh -c 'if command -v uv >/dev/null 2>&1; then uv run python -m pyt
 BACKEND_RUFF = sh -c 'if command -v uv >/dev/null 2>&1; then uv run ruff check app tests; else .venv/bin/ruff check app tests; fi'
 ACME_CONNECTORS = notion github confluence bigquery snowflake databricks redshift fivetran postgres mysql sql_server trino airflow dbt prefect dagster airbyte sqlite
 
-.PHONY: help install dev backend frontend worker chroma test test-backend test-frontend test-e2e test-integration test-integration-connector test-integration-full integration-up integration-down integration-e2e integration-seed acme-fixtures acme-clean-reports acme-seed acme-coverage acme-compile acme-chat acme-agents acme-report acme-full lint matrix-check verify build bundle-frontend quickstart wheel clean
+.PHONY: help install dev backend frontend worker chroma test test-backend test-frontend test-e2e test-integration test-integration-connector test-integration-full integration-up integration-down integration-e2e integration-seed acme-fixtures acme-clean-reports acme-seed acme-coverage acme-compile acme-chat acme-agents acme-evals-loop acme-report acme-full lint matrix-check verify build bundle-frontend quickstart wheel clean
 
 help:
 	@echo "DataClaw — make targets"
@@ -237,6 +237,10 @@ acme-agents:
 	cd backend && RUN_ACME_E2E=$${RUN_ACME_E2E:-1} .venv/bin/python -m pytest ../tests/integration/acme/e2e/test_background_agents.py -v \
 		--json-report --json-report-file="../agents.json"
 
+acme-evals-loop:
+	cd backend && RUN_ACME_E2E=$${RUN_ACME_E2E:-1} .venv/bin/python -m pytest ../tests/integration/acme/e2e/test_evals_loop.py -v \
+		--json-report --json-report-file="../evals-loop.json"
+
 acme-compile:
 	cd backend && RUN_ACME_E2E=$${RUN_ACME_E2E:-1} .venv/bin/python -m pytest ../tests/integration/acme/e2e/test_compile_retrieval.py -v \
 		--json-report --json-report-file="../compile-retrieval.json"
@@ -263,6 +267,7 @@ acme-full:
 		$(MAKE) acme-chat SCENARIO=4_messy RUN_ACME_E2E=1; \
 		$(MAKE) acme-chat SCENARIO=5_write RUN_ACME_E2E=1; \
 		$(MAKE) acme-agents RUN_ACME_E2E=1; \
+		$(MAKE) acme-evals-loop RUN_ACME_E2E=1; \
 		$(MAKE) acme-report REQUIRE_LIVE=1; \
 	else \
 		$(MAKE) acme-seed SAAS_ONLY=1; \
@@ -274,6 +279,7 @@ acme-full:
 		$(MAKE) acme-chat SCENARIO=4_messy RUN_ACME_E2E=0; \
 		$(MAKE) acme-chat SCENARIO=5_write RUN_ACME_E2E=0; \
 		$(MAKE) acme-agents RUN_ACME_E2E=0; \
+		$(MAKE) acme-evals-loop RUN_ACME_E2E=0; \
 		$(MAKE) acme-report; \
 	fi
 
