@@ -24,7 +24,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.domain import KnowledgeEdge, KnowledgeNode
 from app.services.evals.generators.base import CandidateCase
 
-
 # Relationship buckets — we map raw edge `relationship` values to coarse
 # semantic intents the templates care about. Anything not in the buckets
 # is ignored (a producer must not invent meaning from unknown edges).

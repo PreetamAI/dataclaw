@@ -31,7 +31,6 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.base import new_id
 from app.models.domain import (
     ChatMessage,
     ChatSpan,
@@ -450,7 +449,7 @@ async def _execute_one(
     )
 
     # Score every metric. Capture pass-gating outcomes for failure category.
-    gating_results: list[tuple[str, "_GatingOutcome"]] = []
+    gating_results: list[tuple[str, _GatingOutcome]] = []
     run = EvalRun(
         workspace_id=workspace.id,
         batch_id=batch_id,
@@ -637,6 +636,7 @@ def _build_context(
         previous_run_passed=previous_run_passed,
         question=case.question,
         judge_config=judge_config,
+        llm_status=response.get("llm_status"),
     )
 
 
@@ -687,7 +687,7 @@ class _GatingOutcome:
     passed: bool
 
     @classmethod
-    def from_score(cls, outcome: Any) -> "_GatingOutcome":
+    def from_score(cls, outcome: Any) -> _GatingOutcome:
         return cls(
             status=outcome.status,
             score=float(outcome.score or 0.0),

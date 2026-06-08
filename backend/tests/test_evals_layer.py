@@ -184,10 +184,10 @@ async def test_full_lifecycle_candidate_to_golden(db_cases) -> None:
                 origin="manual",
             )
         )
-        await svc.approve(case.id)
-        await svc.promote_golden(case.id)
+        await svc.approve(case.id, workspace_id=ws_id)
+        await svc.promote_golden(case.id, workspace_id=ws_id)
         await s.commit()
-        reloaded = await svc.get(case.id)
+        reloaded = await svc.get(case.id, workspace_id=ws_id)
         assert reloaded.status == "golden"
 
 
@@ -211,7 +211,7 @@ async def test_cannot_promote_candidate_directly_to_golden(db_cases) -> None:
             )
         )
         with pytest.raises(EvalCaseTransitionError):
-            await svc.promote_golden(case.id)
+            await svc.promote_golden(case.id, workspace_id=ws_id)
 
 
 @pytest.mark.asyncio
@@ -233,9 +233,9 @@ async def test_cannot_promote_golden_without_expected_sql(db_cases) -> None:
                 origin="manual",
             )
         )
-        await svc.approve(case.id)
+        await svc.approve(case.id, workspace_id=ws_id)
         with pytest.raises(EvalCaseValidationError):
-            await svc.promote_golden(case.id)
+            await svc.promote_golden(case.id, workspace_id=ws_id)
 
 
 @pytest.mark.asyncio
@@ -248,11 +248,11 @@ async def test_archive_then_unarchive(db_cases) -> None:
         case = await svc.create(
             EvalCaseInput(workspace_id=ws_id, question="q", expected_answer="a")
         )
-        await svc.archive(case.id)
-        reloaded = await svc.get(case.id)
+        await svc.archive(case.id, workspace_id=ws_id)
+        reloaded = await svc.get(case.id, workspace_id=ws_id)
         assert reloaded.status == "archived"
-        await svc.unarchive(case.id)
-        reloaded = await svc.get(case.id)
+        await svc.unarchive(case.id, workspace_id=ws_id)
+        reloaded = await svc.get(case.id, workspace_id=ws_id)
         assert reloaded.status == "candidate"
 
 
@@ -271,9 +271,9 @@ async def test_update_rejected_when_archived(db_cases) -> None:
         case = await svc.create(
             EvalCaseInput(workspace_id=ws_id, question="q", expected_answer="a")
         )
-        await svc.archive(case.id)
+        await svc.archive(case.id, workspace_id=ws_id)
         with pytest.raises(EvalCaseTransitionError):
-            await svc.update(case.id, EvalCasePatch(question="q2"))
+            await svc.update(case.id, EvalCasePatch(question="q2"), workspace_id=ws_id)
 
 
 # ---------- from-feedback ----------
@@ -358,7 +358,7 @@ async def test_list_filters_by_status_origin_and_tag(db_cases) -> None:
             )
         # Make one approved.
         first = (await svc.list(workspace_id=ws_id, limit=10))[0]
-        await svc.approve(first.id)
+        await svc.approve(first.id, workspace_id=ws_id)
         await s.commit()
 
         assert len(await svc.list(workspace_id=ws_id, status="candidate")) == 4
@@ -386,8 +386,8 @@ async def test_golden_lookup_matches_normalized_question(db_cases) -> None:
                 expected_connector_slug="postgres",
             )
         )
-        await svc.approve(case.id)
-        await svc.promote_golden(case.id)
+        await svc.approve(case.id, workspace_id=ws_id)
+        await svc.promote_golden(case.id, workspace_id=ws_id)
         await s.commit()
 
         # Match should be case+punctuation insensitive.
@@ -407,7 +407,7 @@ async def test_golden_lookup_matches_normalized_question(db_cases) -> None:
         assert miss is None
 
         # Non-golden case must not match.
-        await svc.archive(case.id)
+        await svc.archive(case.id, workspace_id=ws_id)
         await s.commit()
         miss2 = await svc.find_golden_for_question(
             workspace_id=ws_id, question="How many users?", connector_slug="postgres"
@@ -425,6 +425,131 @@ async def test_golden_lookup_handles_blank_question(db_cases) -> None:
             await EvalCaseService(s).find_golden_for_question(workspace_id=ws_id, question="")
             is None
         )
+
+
+# ---------- end-to-end flow + workspace isolation (hardening) ----------
+
+
+@pytest.mark.asyncio
+async def test_feedback_to_golden_short_circuits_chat(db_cases) -> None:
+    """End-to-end: 👎 feedback → from-feedback case → approve → golden →
+    chat handler short-circuits with golden_query_hit. Service-level rather
+    than HTTP-level so the test doesn't need to stub the LLM + retrieval
+    stack the real chat route depends on."""
+    from app.models.domain import Feedback
+    from app.services.agents.chat import _golden_hit_response, _lookup_golden
+    from app.services.evals.cases import EvalCaseService
+
+    ws_id, _, _, _, assistant_msg_id = await _seed_chat(db_cases)
+
+    async with db_cases() as s:
+        s.add(
+            Feedback(
+                chat_message_id=assistant_msg_id,
+                sentiment="negative",
+                comment="wrong",
+            )
+        )
+        await s.commit()
+
+    async with db_cases() as s:
+        svc = EvalCaseService(s)
+        case = await svc.create_from_feedback(
+            workspace_id=ws_id,
+            chat_message_id=assistant_msg_id,
+            expected_sql="SELECT count(*) FROM users",
+            expected_answer="42 users",
+            expected_connector_slug="postgres",
+        )
+        await svc.approve(case.id, workspace_id=ws_id)
+        golden = await svc.promote_golden(case.id, workspace_id=ws_id)
+        await s.commit()
+        case_id = golden.id
+
+    async with db_cases() as s:
+        # Normalised exact match — different whitespace + capitalisation must hit.
+        match = await _lookup_golden(
+            s,
+            workspace_id=ws_id,
+            question="  How   many   users? ",
+            connector_slug="postgres",
+        )
+        assert match is not None and match.id == case_id
+
+        response = await _golden_hit_response(
+            s, golden=match, question="how many users?", provider_slug="openai"
+        )
+        assert response["llm_status"] == "golden_query_hit"
+        assert response["sql"] == "SELECT count(*) FROM users"
+        assert response["answer"] == "42 users"
+        assert any(
+            c.get("type") == "golden_query_provenance" and c.get("eval_case_id") == case_id
+            for c in response["citations"]
+        )
+        assert response["retrieval_trace"]["golden_query_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_eval_case_workspace_isolation(db_cases) -> None:
+    """Workspace B must not be able to read or mutate workspace A's cases,
+    even by quoting the case_id directly. Also covers the golden-lookup
+    path so an attacker can't short-circuit chat in their own workspace
+    using another workspace's golden."""
+    from app.models.domain import Workspace
+    from app.services.evals.cases import (
+        EvalCaseInput,
+        EvalCaseNotFound,
+        EvalCasePatch,
+        EvalCaseService,
+    )
+
+    ws_a_id, _, _, _, _ = await _seed_chat(db_cases)
+
+    async with db_cases() as s:
+        ws_b = Workspace(name="ws-b")
+        s.add(ws_b)
+        await s.flush()
+        ws_b_id = ws_b.id
+        case = await EvalCaseService(s).create(
+            EvalCaseInput(
+                workspace_id=ws_a_id,
+                question="how many users?",
+                expected_sql="SELECT count(*) FROM users",
+                expected_connector_slug="postgres",
+                origin="manual",
+            )
+        )
+        await EvalCaseService(s).approve(case.id, workspace_id=ws_a_id)
+        await EvalCaseService(s).promote_golden(case.id, workspace_id=ws_a_id)
+        await s.commit()
+        case_id = case.id
+
+    async with db_cases() as s:
+        svc = EvalCaseService(s)
+        # Read paths: cross-workspace must 404, not silently succeed.
+        with pytest.raises(EvalCaseNotFound):
+            await svc.get(case_id, workspace_id=ws_b_id)
+        with pytest.raises(EvalCaseNotFound):
+            await svc.update(case_id, EvalCasePatch(question="hijack"), workspace_id=ws_b_id)
+        with pytest.raises(EvalCaseNotFound):
+            await svc.approve(case_id, workspace_id=ws_b_id)
+        with pytest.raises(EvalCaseNotFound):
+            await svc.promote_golden(case_id, workspace_id=ws_b_id)
+        with pytest.raises(EvalCaseNotFound):
+            await svc.archive(case_id, workspace_id=ws_b_id)
+
+        # Golden lookup must not cross workspaces — workspace B chat asking
+        # the same question must not pick up workspace A's golden.
+        miss = await svc.find_golden_for_question(
+            workspace_id=ws_b_id,
+            question="how many users?",
+            connector_slug="postgres",
+        )
+        assert miss is None
+
+        # Sanity: workspace A still sees its own case.
+        hit = await svc.get(case_id, workspace_id=ws_a_id)
+        assert hit.id == case_id and hit.status == "golden"
 
 
 # ============================================================
@@ -2107,7 +2232,7 @@ async def test_apply_rules_md_appends_and_dedupes(db_sugg) -> None:
 
     _, _, _, run_id = await _seed_run(db_sugg, failure_category="wrong_connector")
     async with db_sugg() as s:
-        rows = await DiagnoseService(s).diagnose(run_id, use_llm=False)
+        await DiagnoseService(s).diagnose(run_id, use_llm=False)
         # connector_routing has preview-only Apply — use a manually-seeded
         # rules_md suggestion via wrong_result path instead.
     _, _, _, run_id2 = await _seed_run(db_sugg, failure_category="wrong_result")

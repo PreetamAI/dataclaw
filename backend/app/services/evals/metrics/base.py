@@ -50,6 +50,9 @@ class EvalContext:
     repeat_scores: list[float] = field(default_factory=list)  # for flakiness
     # Identity
     question: str = ""
+    # Provenance flag from chat response — lets metrics distinguish a real
+    # agent run from a short-circuited golden hit (which skips retrieval).
+    llm_status: str | None = None
     # Per-workspace judge LLM config used by Ragas-backed judge metrics
     # (faithfulness / answer_relevancy / safety). Shape:
     #   {"api_key": str, "model": str, "base_url": str | None,

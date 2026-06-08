@@ -38,7 +38,7 @@ class FeedbackRecord(BaseModel):
     eval_case_id: str | None
 
     @classmethod
-    def from_row(cls, row: Feedback) -> "FeedbackRecord":
+    def from_row(cls, row: Feedback) -> FeedbackRecord:
         return cls(
             id=row.id,
             chat_message_id=row.chat_message_id,

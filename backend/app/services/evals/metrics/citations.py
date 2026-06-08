@@ -62,6 +62,12 @@ class RetrievalQuality:
         if not expected_keys:
             return MetricScore(metric=self.name, status="skipped",
                                detail={"reason": "no expected citations"})
+        if ctx.llm_status == "golden_query_hit":
+            # Golden short-circuit skips retrieval by design — there are no
+            # candidates to grade against, and failing this metric would
+            # punish a correctly-cached answer.
+            return MetricScore(metric=self.name, status="skipped",
+                               detail={"reason": "golden query hit — retrieval skipped"})
         if not ctx.retrieval_candidates:
             return MetricScore(metric=self.name, status="ok", score=0.0,
                                passed=False,

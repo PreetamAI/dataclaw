@@ -27,7 +27,7 @@ from app.services.evals.cases import (
     EvalCaseService,
     normalize_question,
 )
-from app.services.evals.generators.base import CandidateCase, Producer, ProducerError
+from app.services.evals.generators.base import Producer, ProducerError
 
 logger = logging.getLogger(__name__)
 

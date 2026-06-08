@@ -265,7 +265,7 @@ async def span(
     input: Any = None,
     metadata: dict[str, Any] | None = None,
     model: str | None = None,
-) -> AsyncIterator["SpanHandle"]:
+) -> AsyncIterator[SpanHandle]:
     """Open a child span. If no chat_trace is active (e.g. called from a
     background path that isn't traced yet), this is a no-op handle."""
     state = _current.get()

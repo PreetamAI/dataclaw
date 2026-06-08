@@ -29,7 +29,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E4
 
 from app.api.deps import current_user, require_admin  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
-
 from app.core.logging import configure_logging, run_log_drainer  # noqa: E402
 from app.core.security import (
     decrypt_json,

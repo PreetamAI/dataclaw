@@ -27,13 +27,13 @@ from app.models.domain import (
 )
 from app.services.agents.runtime import BudgetExceeded, enforce_run_budget
 from app.services.connectors.catalog import CATALOG_BY_SLUG
-from app.services.knowledge_compile.service import graph_neighbors
-from app.services.mcp_catalog import tools_for_slug
 from app.services.evals.cases import EvalCaseService
 from app.services.evals.suggestions import (
     load_chat_prompt_override,
     load_chat_rules_md,
 )
+from app.services.knowledge_compile.service import graph_neighbors
+from app.services.mcp_catalog import tools_for_slug
 from app.services.mcp_executor import McpExecutionError, execute_mcp_tool
 from app.services.observability.tracing import span as trace_span
 from app.services.retrieval import BrainRetriever
@@ -98,6 +98,16 @@ async def _golden_hit_response(
                "golden eval case)."
         )
         sp.set_output({"eval_case_id": golden.id, "had_expected_answer": bool(golden.expected_answer)})
+        # Stamp the canonical tool_call so the eval runner's connector/tool
+        # accuracy metrics see the slug that the golden case represents,
+        # rather than ``null`` (which produced spurious wrong_connector
+        # failures on every short-circuited run).
+        golden_tool = golden.expected_tool or ""
+        tool_name = (
+            golden_tool.split(".", 1)[1]
+            if "." in golden_tool
+            else (golden_tool or None)
+        )
         return {
             "answer": answer,
             "sql": golden.expected_sql,
@@ -114,6 +124,10 @@ async def _golden_hit_response(
             "status": "ok",
             "chart_spec": None,
             "retrieval_trace": {"golden_query_hit": True, "eval_case_id": golden.id},
+            "tool_call": {
+                "connector_slug": golden.expected_connector_slug,
+                "tool": tool_name,
+            },
         }
 
 

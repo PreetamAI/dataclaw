@@ -150,6 +150,7 @@ class EvalCaseService:
         self,
         *,
         chat_message_id: str,
+        workspace_id: str | None = None,
         question: str | None = None,
         expected_answer: str | None = None,
         expected_sql: str | None = None,
@@ -181,9 +182,16 @@ class EvalCaseService:
         from app.models.domain import ChatThread
 
         thread = await self._session.get(ChatThread, message.thread_id)
-        workspace_id = thread.workspace_id if thread else None
-        if workspace_id is None:
+        thread_workspace_id = thread.workspace_id if thread else None
+        if thread_workspace_id is None:
             raise EvalCaseValidationError("source chat message has no workspace")
+        # If the caller pinned a workspace, the thread must match — otherwise
+        # workspace B could plant an eval case in workspace A's namespace by
+        # quoting a foreign chat_message_id. Surface as NotFound so we don't
+        # leak existence.
+        if workspace_id is not None and workspace_id != thread_workspace_id:
+            raise EvalCaseNotFound(chat_message_id)
+        workspace_id = thread_workspace_id
 
         case = await self.create(
             EvalCaseInput(
@@ -218,8 +226,15 @@ class EvalCaseService:
 
     # --- read ---
 
-    async def get(self, case_id: str) -> EvalCase:
-        case = await self._session.get(EvalCase, case_id)
+    async def get(self, case_id: str, *, workspace_id: str) -> EvalCase:
+        # Workspace-scoped lookup: a 404 from a foreign workspace is safer
+        # than 403 because it doesn't leak whether the id exists.
+        case = await self._session.scalar(
+            select(EvalCase).where(
+                EvalCase.id == case_id,
+                EvalCase.workspace_id == workspace_id,
+            )
+        )
         if case is None:
             raise EvalCaseNotFound(case_id)
         return case
@@ -259,8 +274,10 @@ class EvalCaseService:
 
     # --- update ---
 
-    async def update(self, case_id: str, patch: EvalCasePatch) -> EvalCase:
-        case = await self.get(case_id)
+    async def update(
+        self, case_id: str, patch: EvalCasePatch, *, workspace_id: str
+    ) -> EvalCase:
+        case = await self.get(case_id, workspace_id=workspace_id)
         if case.status == "archived":
             raise EvalCaseTransitionError("archived cases cannot be edited; unarchive first")
         if patch.question is not None:
@@ -285,8 +302,8 @@ class EvalCaseService:
 
     # --- lifecycle ---
 
-    async def approve(self, case_id: str) -> EvalCase:
-        case = await self.get(case_id)
+    async def approve(self, case_id: str, *, workspace_id: str) -> EvalCase:
+        case = await self.get(case_id, workspace_id=workspace_id)
         if case.status == "approved":
             return case
         if case.status != "candidate":
@@ -297,11 +314,11 @@ class EvalCaseService:
         await self._session.flush()
         return case
 
-    async def promote_golden(self, case_id: str) -> EvalCase:
+    async def promote_golden(self, case_id: str, *, workspace_id: str) -> EvalCase:
         """Promote an approved case to golden. Only approved cases qualify —
         candidates must be reviewed/approved first. ``expected_sql`` is
         required to be golden (we look up by SQL substitution at chat time)."""
-        case = await self.get(case_id)
+        case = await self.get(case_id, workspace_id=workspace_id)
         if case.status == "golden":
             return case
         if case.status != "approved":
@@ -316,16 +333,16 @@ class EvalCaseService:
         await self._session.flush()
         return case
 
-    async def archive(self, case_id: str) -> EvalCase:
-        case = await self.get(case_id)
+    async def archive(self, case_id: str, *, workspace_id: str) -> EvalCase:
+        case = await self.get(case_id, workspace_id=workspace_id)
         if case.status == "archived":
             return case
         case.status = "archived"
         await self._session.flush()
         return case
 
-    async def unarchive(self, case_id: str) -> EvalCase:
-        case = await self.get(case_id)
+    async def unarchive(self, case_id: str, *, workspace_id: str) -> EvalCase:
+        case = await self.get(case_id, workspace_id=workspace_id)
         if case.status != "archived":
             raise EvalCaseTransitionError("only archived cases can be unarchived")
         case.status = "candidate"

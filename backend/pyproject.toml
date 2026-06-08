@@ -54,7 +54,7 @@ evals = [
   "langfuse>=3.0,<5.0",
   "ragas>=0.2.10,<0.3",
   "langchain-openai>=0.2",
-  "langchain-community>=0.3",
+  "langchain-community>=0.3,<0.4",
 ]
 snowflake = ["snowflake-connector-python>=3.7"]
 bigquery = ["google-cloud-bigquery>=3.20"]
@@ -110,3 +110,8 @@ ignore = ["B008", "E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "app/main.py" = ["E402"]
+# Consolidated phase-1 / phase-2 evals test files use per-section imports
+# (`# Section: …` blocks each repeat their own imports for readability).
+# Ruff flags the resulting structural patterns; the duplication is intentional.
+"tests/test_evals_layer.py" = ["E402", "F811", "I001"]
+"tests/test_evals_foundation.py" = ["E402", "F811", "I001"]

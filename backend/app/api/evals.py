@@ -17,9 +17,8 @@ the app today; revisit when multi-tenant lands in Theme 5).
 
 from __future__ import annotations
 
-from typing import Any
-
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
@@ -40,11 +39,6 @@ from app.services.evals.cases import (
     EvalCaseTransitionError,
     EvalCaseValidationError,
 )
-from app.services.evals.generators import ALL_PRODUCERS, run_generators
-from app.services.evals.generators.coordinator import (
-    DEFAULT_LIMIT_PER_SOURCE,
-    WORKSPACE_CANDIDATE_CEILING,
-)
 from app.services.evals.diagnose import (
     APPLY_SUPPORTED_KINDS,
     SUGGESTION_KINDS,
@@ -52,6 +46,11 @@ from app.services.evals.diagnose import (
     DiagnoseService,
     diagnose_status,
     schedule_background_diagnose,
+)
+from app.services.evals.generators import ALL_PRODUCERS, run_generators
+from app.services.evals.generators.coordinator import (
+    DEFAULT_LIMIT_PER_SOURCE,
+    WORKSPACE_CANDIDATE_CEILING,
 )
 from app.services.evals.runner import run_batch as run_eval_batch
 from app.services.evals.suggestions import (
@@ -100,7 +99,7 @@ class EvalCaseDTO(BaseModel):
     updated_at: str
 
     @classmethod
-    def from_row(cls, row: EvalCase) -> "EvalCaseDTO":
+    def from_row(cls, row: EvalCase) -> EvalCaseDTO:
         return cls(
             id=row.id,
             workspace_id=row.workspace_id,
@@ -272,8 +271,9 @@ async def get_case(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(current_user),
 ) -> EvalCaseDTO:
+    workspace = await _current_workspace(session)
     try:
-        row = await EvalCaseService(session).get(case_id)
+        row = await EvalCaseService(session).get(case_id, workspace_id=workspace.id)
     except EvalCaseNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Eval case {exc} not found.") from exc
     return EvalCaseDTO.from_row(row)
@@ -314,8 +314,10 @@ async def create_case_from_feedback(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(current_user),
 ) -> EvalCaseDTO:
+    workspace = await _current_workspace(session)
     try:
         row = await EvalCaseService(session).create_from_feedback(
+            workspace_id=workspace.id,
             chat_message_id=payload.chat_message_id,
             question=payload.question,
             expected_answer=payload.expected_answer,
@@ -339,6 +341,7 @@ async def patch_case(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(current_user),
 ) -> EvalCaseDTO:
+    workspace = await _current_workspace(session)
     try:
         row = await EvalCaseService(session).update(
             case_id,
@@ -351,6 +354,7 @@ async def patch_case(
                 expected_citations=payload.expected_citations,
                 tags=payload.tags,
             ),
+            workspace_id=workspace.id,
         )
     except (EvalCaseValidationError, EvalCaseTransitionError, EvalCaseNotFound) as exc:
         raise _service_error_to_http(exc) from exc
@@ -364,7 +368,8 @@ async def approve_case(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(current_user),
 ) -> EvalCaseDTO:
-    return await _transition(session, case_id, "approve")
+    workspace = await _current_workspace(session)
+    return await _transition(session, case_id, "approve", workspace_id=workspace.id)
 
 
 @router.post("/cases/{case_id}/promote-golden", response_model=EvalCaseDTO)
@@ -373,7 +378,8 @@ async def promote_golden(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(current_user),
 ) -> EvalCaseDTO:
-    return await _transition(session, case_id, "promote_golden")
+    workspace = await _current_workspace(session)
+    return await _transition(session, case_id, "promote_golden", workspace_id=workspace.id)
 
 
 @router.post("/cases/{case_id}/archive", response_model=EvalCaseDTO)
@@ -382,7 +388,8 @@ async def archive_case(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(current_user),
 ) -> EvalCaseDTO:
-    return await _transition(session, case_id, "archive")
+    workspace = await _current_workspace(session)
+    return await _transition(session, case_id, "archive", workspace_id=workspace.id)
 
 
 @router.post("/cases/{case_id}/unarchive", response_model=EvalCaseDTO)
@@ -391,14 +398,17 @@ async def unarchive_case(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(current_user),
 ) -> EvalCaseDTO:
-    return await _transition(session, case_id, "unarchive")
+    workspace = await _current_workspace(session)
+    return await _transition(session, case_id, "unarchive", workspace_id=workspace.id)
 
 
-async def _transition(session: AsyncSession, case_id: str, op: str) -> EvalCaseDTO:
+async def _transition(
+    session: AsyncSession, case_id: str, op: str, *, workspace_id: str
+) -> EvalCaseDTO:
     service = EvalCaseService(session)
     handler = getattr(service, op)
     try:
-        row = await handler(case_id)
+        row = await handler(case_id, workspace_id=workspace_id)
     except (EvalCaseValidationError, EvalCaseTransitionError, EvalCaseNotFound) as exc:
         raise _service_error_to_http(exc) from exc
     await session.commit()
@@ -476,7 +486,8 @@ async def bulk_approve(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(current_user),
 ) -> BulkActionResponse:
-    return await _bulk_transition(session, payload, "approve")
+    workspace = await _current_workspace(session)
+    return await _bulk_transition(session, payload, "approve", workspace_id=workspace.id)
 
 
 @router.post("/cases/bulk-archive", response_model=BulkActionResponse)
@@ -485,7 +496,8 @@ async def bulk_archive(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(current_user),
 ) -> BulkActionResponse:
-    return await _bulk_transition(session, payload, "archive")
+    workspace = await _current_workspace(session)
+    return await _bulk_transition(session, payload, "archive", workspace_id=workspace.id)
 
 
 # ---------- Phase 4: eval runs + dashboard + Promptfoo export ----------
@@ -528,7 +540,7 @@ class EvalRunDTO(BaseModel):
     created_at: str
 
     @classmethod
-    def from_row(cls, row: EvalRun) -> "EvalRunDTO":
+    def from_row(cls, row: EvalRun) -> EvalRunDTO:
         return cls(
             id=row.id,
             workspace_id=row.workspace_id,
@@ -628,6 +640,8 @@ async def _bulk_transition(
     session: AsyncSession,
     payload: BulkCaseRequest,
     op: str,
+    *,
+    workspace_id: str,
 ) -> BulkActionResponse:
     """Apply ``op`` (approve|archive) to every id, collecting per-id outcomes
     so the caller can render a partial-success summary instead of all-or-
@@ -639,7 +653,7 @@ async def _bulk_transition(
     any_changed = False
     for case_id in payload.case_ids:
         try:
-            row = await handler(case_id)
+            row = await handler(case_id, workspace_id=workspace_id)
             any_changed = True
             results.append(BulkActionResult(id=case_id, ok=True, status=row.status))
         except EvalCaseNotFound:
@@ -1027,19 +1041,19 @@ def _emit_promptfoo_yaml(cases: list[EvalCase]) -> str:
     if not cases:
         lines.append("  []")
         return "\n".join(lines) + "\n"
-    for case in cases:
+    for eval_case in cases:
         lines.append("  - description: |")
-        for chunk in case.question.splitlines() or [case.question]:
+        for chunk in eval_case.question.splitlines() or [eval_case.question]:
             lines.append(f"      {chunk}")
         lines.append("    vars:")
-        lines.append(f"      question: {_yaml_str(case.question)}")
-        if case.expected_sql:
-            lines.append(f"      expected_sql: {_yaml_str(case.expected_sql)}")
+        lines.append(f"      question: {_yaml_str(eval_case.question)}")
+        if eval_case.expected_sql:
+            lines.append(f"      expected_sql: {_yaml_str(eval_case.expected_sql)}")
         lines.append("    assert:")
-        if case.expected_answer:
+        if eval_case.expected_answer:
             lines.append("      - type: contains")
-            lines.append(f"        value: {_yaml_str(case.expected_answer)}")
-        if case.expected_sql:
+            lines.append(f"        value: {_yaml_str(eval_case.expected_answer)}")
+        if eval_case.expected_sql:
             lines.append("      - type: llm-rubric")
             lines.append(
                 "        value: |"
@@ -1047,9 +1061,9 @@ def _emit_promptfoo_yaml(cases: list[EvalCase]) -> str:
             lines.append(
                 "          The model's SQL must be semantically equivalent to:"
             )
-            for chunk in case.expected_sql.splitlines():
+            for chunk in eval_case.expected_sql.splitlines():
                 lines.append(f"          {chunk}")
-        if not (case.expected_answer or case.expected_sql):
+        if not (eval_case.expected_answer or eval_case.expected_sql):
             lines.append("      - type: not-empty")
     return "\n".join(lines) + "\n"
 
@@ -1087,7 +1101,7 @@ class SuggestionDTO(BaseModel):
     apply_supported: bool
 
     @classmethod
-    def from_row(cls, row: EvalSuggestion) -> "SuggestionDTO":
+    def from_row(cls, row: EvalSuggestion) -> SuggestionDTO:
         return cls(
             id=row.id,
             eval_run_id=row.eval_run_id,

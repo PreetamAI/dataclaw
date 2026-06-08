@@ -51,7 +51,7 @@ class LangfuseConfig:
     project: str | None = None
 
     @classmethod
-    def from_settings(cls, payload: dict[str, Any]) -> "LangfuseConfig | None":
+    def from_settings(cls, payload: dict[str, Any]) -> LangfuseConfig | None:
         if not payload.get("enabled"):
             return None
         host = (payload.get("host") or "").strip()

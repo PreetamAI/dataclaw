@@ -19,7 +19,6 @@ from app.services.evals.metrics.operational import (
 from app.services.evals.metrics.result_accuracy import ResultAccuracy
 from app.services.evals.metrics.sql_correctness import SqlCorrectness
 
-
 # Order is the order metric rows appear in the run-detail UI.
 ALL_METRICS: list[Metric] = [
     SqlCorrectness(),

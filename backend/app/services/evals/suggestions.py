@@ -317,8 +317,8 @@ class SuggestionService:
             ),
             created_by=user,
         )
-        await service.approve(new_case.id)
-        promoted = await service.promote_golden(new_case.id)
+        await service.approve(new_case.id, workspace_id=row.workspace_id)
+        promoted = await service.promote_golden(new_case.id, workspace_id=row.workspace_id)
         return {
             "created_eval_case_id": promoted.id,
             "promoted_to_golden": True,
@@ -408,7 +408,7 @@ class SuggestionService:
             return {"skipped": "no created_eval_case_id recorded"}
         service = EvalCaseService(self._session)
         try:
-            archived = await service.archive(case_id)
+            archived = await service.archive(case_id, workspace_id=row.workspace_id)
         except Exception as exc:
             # Case might have been archived/deleted independently.
             return {"warning": f"archive failed: {exc.__class__.__name__}"}

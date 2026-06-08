@@ -120,8 +120,8 @@ async def test_chat_trace_persists_root_and_nested_spans(db_tracing) -> None:
         ) as trace:
             async with trace_span("retrieval", "brain") as r:
                 r.set_output({"node_count": 1})
-            async with trace_span("llm", "primary", model="gpt") as l:
-                l.set_usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+            async with trace_span("llm", "primary", model="gpt") as llm_span:
+                llm_span.set_usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
             async with trace_span("tool", "sqlite.read_select") as t:
                 t.set_output({"status": "ok"})
         # trace_id must be deterministic from the message id when langfuse is
@@ -925,11 +925,11 @@ class _StubObservation:
     updates: list[dict[str, Any]] = field(default_factory=list)
     ended: bool = False
 
-    def update(self, **kwargs: Any) -> "_StubObservation":
+    def update(self, **kwargs: Any) -> _StubObservation:
         self.updates.append(kwargs)
         return self
 
-    def end(self, **_kwargs: Any) -> "_StubObservation":
+    def end(self, **_kwargs: Any) -> _StubObservation:
         self.ended = True
         return self
 

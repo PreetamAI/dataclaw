@@ -32,6 +32,17 @@ jobs:
           ! git ls-files | grep -E '(^|/)(\.env|api_tokens\.txt|goal\.md)$|(^|/)docs/internal/'
       - name: Required contribution gate
         run: make verify
+      - name: Verify alembic migrations apply on a clean DB
+        working-directory: backend/app
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///./alembic_check.db
+          DEMO_DATABASE_URL: sqlite+aiosqlite:///./alembic_check_demo.db
+        # Forward-only smoke. Some legacy migrations use ALTER-CONSTRAINT
+        # ops sqlite doesn't support without batch mode, so we don't
+        # round-trip via `downgrade base`. The upgrade path still catches
+        # broken revisions, missing revision parents, and syntax errors
+        # in newly-added migrations.
+        run: uv run alembic upgrade head
       - name: Build wheel
         run: make wheel
       - name: Smoke wheel entrypoint

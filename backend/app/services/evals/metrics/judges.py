@@ -32,13 +32,31 @@ JUDGE_TIMEOUT_SECONDS = 30.0
 
 
 def _try_import_ragas() -> bool:
+    """Probe whether ragas is installed. We perform the import in a fresh
+    worker thread with a stdlib ``SelectorEventLoop`` because
+    ``ragas.executor`` calls ``nest_asyncio.apply()`` at module-init time,
+    and that crashes on the uvloop driving FastAPI."""
+    import concurrent.futures
+
+    def _worker() -> bool:
+        loop = asyncio.SelectorEventLoop()
+        asyncio.set_event_loop(loop)
+        try:
+            import ragas  # noqa: F401
+            from langchain_openai import ChatOpenAI  # noqa: F401
+            from ragas.dataset_schema import SingleTurnSample  # noqa: F401
+            from ragas.llms import LangchainLLMWrapper  # noqa: F401
+            return True
+        except ImportError:
+            return False
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
     try:
-        import ragas  # noqa: F401
-        from langchain_openai import ChatOpenAI  # noqa: F401
-        from ragas.dataset_schema import SingleTurnSample  # noqa: F401
-        from ragas.llms import LangchainLLMWrapper  # noqa: F401
-        return True
-    except ImportError:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(_worker).result()
+    except Exception:
         return False
 
 
@@ -129,7 +147,7 @@ async def _run_with_timeout(coro: Any, *, metric_name: str) -> tuple[float | Non
     (score, error). On timeout / exception, returns (None, error_msg)."""
     try:
         score = await asyncio.wait_for(coro, timeout=JUDGE_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return None, f"{metric_name} timed out after {JUDGE_TIMEOUT_SECONDS}s"
     except Exception as exc:
         return None, f"{metric_name} failed: {exc.__class__.__name__}: {exc}"
@@ -305,15 +323,32 @@ class Safety:
 
 def _run_score(metric: Any, sample: Any, metric_name: str) -> tuple[float | None, str | None]:
     """Bridge from the sync ``Metric.score()`` interface into the async
-    Ragas judge call. We need an event loop for ``single_turn_ascore``."""
-    try:
-        loop = asyncio.new_event_loop()
+    Ragas judge call.
+
+    Ragas calls ``nest_asyncio.apply()`` with no argument, which reads
+    ``asyncio.get_event_loop()`` — and on this app that returns the outer
+    uvloop driving the FastAPI request. ``nest_asyncio`` only patches stdlib
+    loops and crashes on uvloop. Even creating a SelectorEventLoop in the
+    same thread doesn't help because the uvloop is still the "current" loop.
+    Solution: run the ragas call in a fresh worker thread with its own stdlib
+    SelectorEventLoop — no uvloop in sight, so ``nest_asyncio.apply()``
+    patches our loop cleanly."""
+    import concurrent.futures
+
+    def _worker() -> tuple[float | None, str | None]:
+        loop = asyncio.SelectorEventLoop()
+        asyncio.set_event_loop(loop)
         try:
             return loop.run_until_complete(
                 _run_with_timeout(metric.single_turn_ascore(sample), metric_name=metric_name)
             )
         finally:
             loop.close()
+            asyncio.set_event_loop(None)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(_worker).result()
     except Exception as exc:
         return None, f"{metric_name} runner error: {exc.__class__.__name__}: {exc}"
 
