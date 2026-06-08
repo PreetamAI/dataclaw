@@ -381,6 +381,14 @@ export type FeedbackCreateRequest = {
   comment?: string | null;
 };
 
+export type MessageFeedback = {
+  chat_message_id: string;
+  sentiment: FeedbackSentiment | null;
+  feedback_id: string | null;
+  comment: string | null;
+  eval_case_id: string | null;
+};
+
 export type ObservabilityField = {
   name: string;
   label: string;

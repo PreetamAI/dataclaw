@@ -37,6 +37,7 @@ import type {
   AgentSummary,
   FeedbackCreateRequest,
   FeedbackRecord,
+  MessageFeedback,
   GrantMatrix,
   CompileResult,
   LlmCatalogItem,
@@ -296,6 +297,10 @@ export const dataclawApi = createApi({
       invalidatesTags: (_result, _err, arg) => [
         { type: "Feedback", id: arg.chat_message_id },
       ],
+    }),
+    messageFeedback: builder.query<MessageFeedback, string>({
+      query: (messageId) => `/chat-messages/${messageId}/feedback`,
+      providesTags: (_result, _err, id) => [{ type: "Feedback", id }],
     }),
     chatTrace: builder.query<ChatTraceView, string>({
       query: (messageId) => `/chat-messages/${messageId}/trace`,
@@ -579,6 +584,7 @@ export const {
   useLazyKnowledgeGraphQuery,
   useMonitoringAgentsQuery,
   useSubmitFeedbackMutation,
+  useMessageFeedbackQuery,
   useChatTraceQuery,
   useChatTraceLinkQuery,
   useObservabilityProvidersQuery,

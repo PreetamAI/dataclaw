@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   useChatTraceLinkQuery,
+  useMessageFeedbackQuery,
   useSubmitFeedbackMutation,
 } from "../services/api";
 import type { ChatMessage } from "../types";
@@ -12,9 +13,17 @@ type Status = "idle" | "submitting" | "submitted" | "error";
 export function FeedbackBar({ message }: { message: ChatMessage }) {
   const messageId = message.id;
   const [submit, submitState] = useSubmitFeedbackMutation();
+  // Server-truth: which sentiment (if any) is already stored for this message.
+  // Driving `selected` from this query is what makes the 👍/👎 highlight
+  // survive page refreshes AND keeps each chat session showing its own state.
+  const { data: stored } = useMessageFeedbackQuery(messageId);
   const [selected, setSelected] = useState<"positive" | "negative" | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
+
+  useEffect(() => {
+    setSelected(stored?.sentiment ?? null);
+  }, [stored?.sentiment, messageId]);
 
   // Lazy: only fetch the Langfuse link when the user expands "view trace".
   const [traceOpen, setTraceOpen] = useState(false);

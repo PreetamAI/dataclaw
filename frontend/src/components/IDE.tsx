@@ -269,7 +269,10 @@ export function IDE({ activeThreadId, setActiveThreadId, hasKnowledgeBase, onErr
         {!pending && lastAssistantMessage ? (
           <div className="chat-end-feedback">
             <span className="chat-end-feedback-label">How was the last answer?</span>
-            <FeedbackBar message={lastAssistantMessage} />
+            <FeedbackBar
+              key={lastAssistantMessage.id}
+              message={lastAssistantMessage}
+            />
           </div>
         ) : null}
       </div>
