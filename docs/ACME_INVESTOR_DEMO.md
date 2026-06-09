@@ -70,7 +70,7 @@ maps to a row in this table.
 | # | Step | What the app does | How to verify (UI / DB / API) |
 |---|------|-------------------|-------------------------------|
 | 1 | **Connect & sync** Postgres, Notion, Airflow. | `POST /connectors/{slug}/test` then `POST /connectors/{slug}/sync` for each. Knowledge graph + lineage refresh on success. | Settings → Integrations: all three show **status: ok** with green pill. |
-| 2 | **Chat turn 1**: ask `"Why did churn spike last week and which DAG owns the calculation?"` | Real LLM call. Agent picks tools across all three connectors. | Assistant message renders. View trace: see `retrieval / golden_lookup` with `hit: false`, plus `tool` spans for `postgres.read_query_select`, a Notion read, and `airflow.read_*`. |
+| 2 | **Chat turn 1**: ask the canonical investor question pinned at the top of [`test_evals_loop.py`](../tests/integration/acme/e2e/test_evals_loop.py) — *"How many customers churned in the last 7 days according to Postgres, which Notion page documents the churn definition, and which Airflow DAG owns the churn calculation?"* | Real LLM call. Agent picks tools across all three connectors. | Assistant message renders. View trace: see `retrieval / golden_lookup` with `hit: false`, plus `tool` spans for `postgres.read_query_select`, a Notion read, and `airflow.read_list_dags`. |
 | 3 | **Feedback (👎 + comment)**: "we want the canonical churn-count SQL pinned". | `POST /feedback {sentiment: "negative", comment, chat_message_id}`. | DB: `feedback` row with `sentiment='negative'`, `eval_case_id IS NULL` (not promoted yet). |
 | 4 | **Create eval case from feedback** with `expected_sql` + `expected_answer` pinned to the canonical churn-count query. | `POST /evals/cases/from-feedback`. Stamps the latest negative feedback row's `eval_case_id`. | Evals page → Candidate tab: new row, origin `feedback`, status `candidate`. |
 | 5 | **Approve → promote-golden**. | Two POST calls, status walks `candidate → approved → golden`. | Evals page → Golden tab: row visible with gold pill. DB: `eval_cases.status='golden'`. |
@@ -112,7 +112,7 @@ REQUIRE_LIVE=1`, so it runs as part of the release-gate sweep.
 Two operators running this should converge on the same persisted artefacts:
 
 - One `eval_cases` row, `status='golden'`, `origin='feedback'`,
-  `expected_sql` byte-equal to the canonical `SELECT COUNT(*) FROM raw.customers …` pinned in the test.
+  `expected_sql` byte-equal to `SELECT COUNT(*) FROM raw.churn_events WHERE churned_at >= now() - interval '7 days'`.
 - One `feedback` row stamped with that case's id.
 - At least one `eval_runs` row referencing the golden case + a Langfuse
   trace id (when Langfuse is configured).

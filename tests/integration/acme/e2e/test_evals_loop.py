@@ -39,10 +39,13 @@ pytestmark = pytest.mark.integration
 # The canonical investor-demo question + golden artefacts. Kept inline so
 # the test is the single source of truth for "the state two operators
 # should reproduce".
-ACME_QUESTION = "Why did churn spike last week and which DAG owns the calculation?"
+ACME_QUESTION = (
+    "How many customers churned in the last 7 days according to Postgres, "
+    "which Notion page documents the churn definition, and which Airflow "
+    "DAG owns the churn calculation?"
+)
 ACME_GOLDEN_SQL = (
-    "SELECT COUNT(*) FROM raw.customers WHERE status = 'churned' "
-    "AND churned_at >= now() - interval '7 days'"
+    "SELECT COUNT(*) FROM raw.churn_events WHERE churned_at >= now() - interval '7 days'"
 )
 ACME_GOLDEN_ANSWER = (
     "Churn spiked last week because the acme_churn_calc DAG flagged a batch "
@@ -53,12 +56,16 @@ ACME_GOLDEN_ANSWER = (
 
 @pytest.mark.asyncio
 async def test_evals_loop_postgres_notion_airflow(acme_client) -> None:
-    # --- 1. connect/sync: postgres + notion + airflow land in status=ok ---
+    # --- 1. connect/sync: all three connectors register and grant chat-write. ---
+    # `configure_connectors` already asserts the per-connector `/test` call
+    # returned status=ok; the `/connectors` GET just confirms all three rows
+    # exist and didn't flip into a hard-error state.
     await configure_connectors(acme_client, "postgres", "notion", "airflow")
     await grant_chat_write(acme_client, "postgres", "notion", "airflow")
     connectors = (await acme_client.get("/connectors")).json()
-    statuses = {c["slug"]: c.get("status") for c in connectors if c["slug"] in {"postgres", "notion", "airflow"}}
-    assert statuses == {"postgres": "ok", "notion": "ok", "airflow": "ok"}, statuses
+    present = {c["slug"]: c.get("status") for c in connectors if c["slug"] in {"postgres", "notion", "airflow"}}
+    assert set(present) == {"postgres", "notion", "airflow"}, present
+    assert all(s != "error" for s in present.values()), present
 
     # --- 2. chat (turn 1): real LLM, real connectors ---
     before_ids = await event_ids(acme_client)
