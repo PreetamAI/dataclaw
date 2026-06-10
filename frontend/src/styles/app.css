@@ -3637,3 +3637,74 @@ code, kbd {
 }
 
 .evals-detail-empty { color: var(--muted); font-size: 11px; }
+
+/* Evals page tightening (task 3 follow-up): cleaner search bar,
+   collapsed generator panel, balanced right-pane empty state. */
+.evals-cases-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 10px;
+}
+.evals-search {
+  position: relative;
+  flex: 1 1 360px;
+  max-width: 520px;
+}
+.evals-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 14px;
+  pointer-events: none;
+}
+.evals-search input {
+  width: 100%;
+  padding: 9px 12px 9px 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  font-size: 13px;
+}
+.evals-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.evals-search input::placeholder { color: var(--muted); }
+
+.evals-generate-collapsible {
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.12);
+}
+.evals-generate-collapsible > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 9px 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+  user-select: none;
+}
+.evals-generate-collapsible > summary::-webkit-details-marker { display: none; }
+.evals-generate-collapsible > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 8px;
+  transition: transform 120ms ease;
+}
+.evals-generate-collapsible[open] > summary::before { transform: rotate(90deg); }
+.evals-generate-collapsible[open] > summary { color: var(--text); border-bottom: 1px solid var(--line); }
+.evals-generate-collapsible .evals-generate-panel { border: none; padding: 12px 14px; margin: 0; }
+
+.evals-layout { padding-top: 6px; }
+
+/* When right pane shows the empty-state, give it room to breathe. */
+.evals-detail > .empty-state {
+  margin-top: 24px;
+  padding: 28px 24px;
+  text-align: center;
+}

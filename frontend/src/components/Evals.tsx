@@ -180,7 +180,8 @@ function EvalsCases() {
   return (
     <>
       <div className="evals-cases-toolbar">
-        <label className="integration-search">
+        <label className="evals-search">
+          <span className="evals-search-icon" aria-hidden>⌕</span>
           <input
             aria-label="Search eval cases"
             placeholder="Search question, SQL, answer…"
@@ -190,19 +191,22 @@ function EvalsCases() {
         </label>
       </div>
 
-      <GenerateCandidatesPanel
-        onComplete={(resp) => {
-          setTab("candidate");
-          clearChecked();
-          setBulkMessage(
-            resp.inserted_ids.length === 0
-              ? "No new candidates (all duplicates or ceiling reached)."
-              : `Inserted ${resp.inserted_ids.length} new candidate${
-                  resp.inserted_ids.length === 1 ? "" : "s"
-                }.`,
-          );
-        }}
-      />
+      <details className="evals-generate-collapsible">
+        <summary>Generate candidates from schema, KG, lineage, or fixtures</summary>
+        <GenerateCandidatesPanel
+          onComplete={(resp) => {
+            setTab("candidate");
+            clearChecked();
+            setBulkMessage(
+              resp.inserted_ids.length === 0
+                ? "No new candidates (all duplicates or ceiling reached)."
+                : `Inserted ${resp.inserted_ids.length} new candidate${
+                    resp.inserted_ids.length === 1 ? "" : "s"
+                  }.`,
+            );
+          }}
+        />
+      </details>
 
       <div className="category-tabs" role="tablist">
         {STATUS_TABS.map((t) => (
@@ -284,9 +288,10 @@ function EvalsCases() {
         </div>
         <div className="evals-detail">
           {active ? <EvalCaseDetail evalCase={active} /> : (
-            <div className="settings-empty">
-              Select a case to view, edit, and transition it.
-            </div>
+            <EmptyState
+              title="No case selected"
+              body="Pick a row on the left to view, edit, or transition it. Tick the checkboxes to bulk-act."
+            />
           )}
         </div>
       </div>
