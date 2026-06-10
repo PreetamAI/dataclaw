@@ -1,5 +1,8 @@
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
+import { JsonDetails } from "./JsonDetails";
+import { SqlBlock } from "./SqlBlock";
 import {
   useApplySuggestionMutation,
   useApproveEvalCaseMutation,
@@ -39,6 +42,22 @@ const STATUS_TABS: { key: EvalCaseStatus | "all"; label: string; pill: string }[
   { key: "archived", label: "Archived", pill: "tab-archived" },
   { key: "all", label: "All", pill: "tab-all" },
 ];
+
+const STATUS_LABEL: Record<string, string> = {
+  candidate: "Candidate",
+  approved: "Approved",
+  golden: "Golden",
+  archived: "Archived",
+};
+
+function EmptyState({ title, body }: { title: string; body?: ReactNode }) {
+  return (
+    <div className="empty-state">
+      <strong>{title}</strong>
+      {body ? <p>{body}</p> : null}
+    </div>
+  );
+}
 
 export function Evals() {
   const [section, setSection] = useState<EvalsSection>("cases");
@@ -404,7 +423,7 @@ function EvalCaseRow({
       >
         <div className="evals-list-row-head">
           <span className={`evals-status-pill evals-status-${evalCase.status}`}>
-            {evalCase.status}
+            {STATUS_LABEL[evalCase.status] ?? evalCase.status}
           </span>
           <span className="evals-list-row-origin">{evalCase.origin}</span>
         </div>
@@ -497,6 +516,7 @@ function EvalCaseDetail({ evalCase }: { evalCase: EvalCase }) {
 
       <label className="settings-field">
         <span>Expected SQL {evalCase.status === "approved" ? "(required for golden)" : ""}</span>
+        {expectedSql.trim() ? <SqlBlock sql={expectedSql} label="Preview" /> : null}
         <textarea
           className="eval-correction-sql"
           rows={4}
@@ -751,7 +771,11 @@ function EvalRunDetailPanel({ runId }: { runId: string }) {
                 <td>{r.score === null ? "—" : Number(r.score).toFixed(3)}</td>
                 <td>{r.passed === null ? "—" : r.passed ? "yes" : "no"}</td>
                 <td>
-                  <code>{JSON.stringify(r.detail).slice(0, 160)}</code>
+                  {r.detail && Object.keys(r.detail as object).length > 0 ? (
+                    <JsonDetails label="Show raw detail" value={r.detail} />
+                  ) : (
+                    <span className="evals-detail-empty">—</span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -856,12 +880,17 @@ function RunSuggestionsPanel({ runId }: { runId: string }) {
       {isLoading ? (
         <div className="feedback-trace-note">Loading…</div>
       ) : !hasSuggestions ? (
-        <div className="feedback-trace-note">
-          No suggestions yet. Click <em>Diagnose this run</em> to generate
-          rules-based + LLM-augmented suggestions across prompt, golden
-          query, rules, connector routing, tool descriptions, and retrieval
-          context. None are applied automatically.
-        </div>
+        <EmptyState
+          title="No suggestions yet"
+          body={
+            <>
+              Click <em>Diagnose this run</em> to generate rules-based +
+              LLM-augmented suggestions across prompt, golden query, rules,
+              connector routing, tool descriptions, and retrieval context.
+              None are applied automatically.
+            </>
+          }
+        />
       ) : (
         <ul className="evals-suggestions-list">
           {suggestions!.map((s) => (

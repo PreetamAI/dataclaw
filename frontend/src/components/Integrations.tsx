@@ -1,3 +1,4 @@
+import { CheckCircle2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -66,7 +67,7 @@ function ObservabilityCard({
   const initialValues = useMemo(() => buildInitialValues(item, record), [item, record]);
   const [values, setValues] = useState<Record<string, string>>(initialValues);
   const [enabled, setEnabled] = useState<boolean>(Boolean(record?.enabled));
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; status: string; message: string } | null>(null);
 
   // Re-sync local form when the upstream record changes (e.g. after disable).
   useEffect(() => {
@@ -97,9 +98,13 @@ function ObservabilityCard({
     setTestResult(null);
     const result = await runTest(item.slug).unwrap().catch(() => null);
     if (result) {
-      setTestResult(`${result.status}: ${result.message}`);
+      setTestResult({
+        ok: String(result.status).toLowerCase() === "ok",
+        status: result.status,
+        message: result.message,
+      });
     } else {
-      setTestResult("Test failed.");
+      setTestResult({ ok: false, status: "error", message: "Test failed." });
     }
   };
 
@@ -185,7 +190,15 @@ function ObservabilityCard({
         <a href={item.docs_url} target="_blank" rel="noreferrer" className="settings-link">
           Docs ↗
         </a>
-        {testResult ? <span className="settings-status-message">{testResult}</span> : null}
+        {testResult ? (
+          <span
+            className={`settings-status-message integration-test-result ${testResult.ok ? "ok" : "error"}`}
+            role={testResult.ok ? "status" : "alert"}
+          >
+            {testResult.ok ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+            <span>{testResult.message || testResult.status}</span>
+          </span>
+        ) : null}
       </footer>
     </article>
   );

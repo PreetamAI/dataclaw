@@ -1,4 +1,4 @@
-import { ChevronDown, Database, Send, Sparkles, StopCircle } from "lucide-react";
+import { ChevronDown, Database, FileText, Send, Sparkles, Star, StopCircle, Wrench } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch } from "react-redux";
 
@@ -7,6 +7,7 @@ import { ChatChart } from "./ChatChart";
 import { CitationDrawer } from "./CitationDrawer";
 import { FeedbackBar } from "./FeedbackBar";
 import { RetrievalTrace } from "./RetrievalTrace";
+import { SqlBlock } from "./SqlBlock";
 import { WriteToolPreview } from "./WriteToolPreview";
 import {
   API,
@@ -539,7 +540,8 @@ function ChatBubble({
       </div>
     );
   }
-  const visibleCitations = message.citations.filter((citation) => citation.type !== "tool_call_provenance");
+  const provenanceCitations = message.citations.filter((c) => c.type === "tool_call_provenance");
+  const sourceCitations = message.citations.filter((c) => c.type !== "tool_call_provenance");
   return (
     <div className="bubble assistant">
       {message.provider ? (
@@ -548,12 +550,7 @@ function ChatBubble({
         </span>
       ) : null}
       <p>{message.content}</p>
-      {message.sql ? (
-        <div className="editor-sql">
-          <span>SQL</span>
-          <code>{message.sql}</code>
-        </div>
-      ) : null}
+      {message.sql ? <SqlBlock sql={message.sql} /> : null}
       {message.chart_spec ? <ChatChart spec={message.chart_spec} /> : null}
       {message.action && setTab ? (
         <button className="chat-action-button" onClick={() => setTab(message.action!.tab)} type="button">
@@ -589,19 +586,60 @@ function ChatBubble({
           </table>
         </div>
       ) : null}
-      {visibleCitations.length > 0 ? (
+      {provenanceCitations.length > 0 ? (
+        <div className="bubble-provenance">
+          {provenanceCitations.map((citation, index) => (
+            <span
+              key={`prov-${citation.connector}-${citation.tool}-${index}`}
+              className="provenance-pill"
+            >
+              <Wrench size={11} aria-hidden /> via{" "}
+              <strong>{citation.connector}</strong>
+              {citation.tool ? <> · <code>{citation.tool}</code></> : null}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {sourceCitations.length > 0 ? (
         <div className="bubble-citations">
-          {visibleCitations.map((citation, index) => (
-            citation.path ? (
-              <button key={`${citation.path}-${index}`} onClick={() => onCitationClick(citation)} type="button">
-                {citation.title} <em>({citation.connector})</em>
+          {sourceCitations.map((citation, index) => {
+            const icon = citationIcon(citation);
+            const key = `${citation.path ?? citation.title}-${index}`;
+            const body = (
+              <>
+                {icon}
+                <span className="citation-title">{citation.title}</span>
+                <em>({citation.connector})</em>
+              </>
+            );
+            return citation.path ? (
+              <button
+                key={key}
+                onClick={() => onCitationClick(citation)}
+                type="button"
+                data-citation-type={citation.type ?? "source"}
+              >
+                {body}
               </button>
             ) : (
-              <span key={`${citation.title}-${index}`}>{citation.title} <em>({citation.connector})</em></span>
-            )
-          ))}
+              <span
+                key={key}
+                data-citation-type={citation.type ?? "source"}
+              >
+                {body}
+              </span>
+            );
+          })}
         </div>
       ) : null}
     </div>
   );
+}
+
+function citationIcon(citation: ChatCitation) {
+  if (citation.type === "golden_query_provenance") return <Star size={12} aria-hidden />;
+  if (citation.connector?.toLowerCase() === "postgres" || citation.connector?.toLowerCase() === "mysql") {
+    return <Database size={12} aria-hidden />;
+  }
+  return <FileText size={12} aria-hidden />;
 }

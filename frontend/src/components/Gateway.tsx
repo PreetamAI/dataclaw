@@ -14,6 +14,7 @@ import { useMemo, useRef, useState } from "react";
 
 import { AGENT_ICONS } from "../lib/agent-icons";
 import { logoDefinition } from "../lib/logos";
+import { JsonDetails } from "./JsonDetails";
 import {
   useAcknowledgeAlertMutation,
   useApproveAlertMutation,
@@ -21,7 +22,7 @@ import {
   useResolveAlertMutation,
   useWorkerStatusQuery,
 } from "../services/api";
-import type { ObservabilityEvent } from "../types";
+import type { AgentToolCallEvent, ObservabilityEvent } from "../types";
 import { ObservabilityAgentHistory } from "./ObservabilityAgentHistory";
 
 const STATE_FILTERS: { key: string; label: string }[] = [
@@ -348,7 +349,7 @@ function EventDrawer({
         {Array.isArray(event.timeline) && event.timeline.length > 0 ? (
           <section className="event-drawer-section">
             <h3>Timeline</h3>
-            <pre>{JSON.stringify(event.timeline, null, 2)}</pre>
+            <JsonDetails label={`Show timeline (${event.timeline.length} entries)`} value={event.timeline} />
           </section>
         ) : null}
         <section className="event-drawer-section">
@@ -362,7 +363,7 @@ function EventDrawer({
                   <strong>{call.connector_slug ? `${call.connector_slug}.` : ""}{call.tool_name}</strong>
                   <span>{call.status} · {call.latency_ms}ms · {new Date(call.called_at).toLocaleString()}</span>
                   {call.error_message ? <em>{call.error_message}</em> : null}
-                  {call.result_summary ? <code>{call.result_summary}</code> : null}
+                  {renderToolCallSummary(call)}
                 </li>
               ))}
             </ul>
@@ -371,4 +372,40 @@ function EventDrawer({
       </div>
     </aside>
   );
+}
+
+function renderToolCallSummary(call: AgentToolCallEvent) {
+  const slug = (call.connector_slug || "").toLowerCase();
+  const args = call.args_json || {};
+  if (slug === "airflow") {
+    const dagId = pickString(args, "dag_id");
+    const runId = pickString(args, "run_id", "dag_run_id");
+    const state = pickString(args, "state");
+    const fields: Array<[string, string]> = [];
+    if (dagId) fields.push(["DAG", dagId]);
+    if (runId) fields.push(["Run", runId]);
+    if (state) fields.push(["State", state]);
+    if (fields.length > 0) {
+      return (
+        <dl className="tool-call-airflow">
+          {fields.map(([label, value]) => (
+            <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
+          ))}
+          {call.result_summary ? <div><dt>Result</dt><dd>{call.result_summary}</dd></div> : null}
+        </dl>
+      );
+    }
+  }
+  if (call.result_summary) {
+    return <code className="tool-call-summary">{call.result_summary}</code>;
+  }
+  return null;
+}
+
+function pickString(args: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return null;
 }

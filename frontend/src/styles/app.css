@@ -3466,3 +3466,174 @@ code, kbd {
   .evals-runs-comparison { grid-template-columns: 1fr; }
   .evals-suggestion-diff-grid { grid-template-columns: 1fr; }
 }
+
+/* --- UI polish (task 3): SqlBlock + JsonDetails + citation pills + tool-call cards + empty state --- */
+
+.sql-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.18);
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow: auto;
+}
+.sql-block-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.sql-block pre {
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.sql-block code { background: transparent; padding: 0; }
+.sql-keyword { color: var(--accent); font-weight: 600; }
+.sql-string  { color: var(--amber); }
+.sql-number  { color: var(--accent-strong); }
+.sql-comment { color: var(--muted); font-style: italic; }
+.sql-punct   { color: var(--muted); }
+
+.json-details {
+  margin: 6px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.12);
+}
+.json-details > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+.json-details > summary::-webkit-details-marker { display: none; }
+.json-details > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 120ms ease;
+}
+.json-details[open] > summary::before { transform: rotate(90deg); }
+.json-details pre {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: auto;
+  max-height: 320px;
+}
+
+.bubble-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+.provenance-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(0, 255, 136, 0.05);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.provenance-pill strong { color: var(--text); font-weight: 600; }
+.provenance-pill code {
+  background: transparent;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.bubble-citations button,
+.bubble-citations span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.bubble-citations [data-citation-type="golden_query_provenance"] {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.citation-title { font-weight: 500; }
+
+.tool-call-airflow {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.12);
+  font-size: 12px;
+}
+.tool-call-airflow > div { display: contents; }
+.tool-call-airflow dt {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  align-self: center;
+}
+.tool-call-airflow dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  word-break: break-all;
+}
+.tool-call-summary {
+  display: block;
+  margin-top: 6px;
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.empty-state {
+  padding: 16px 18px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.12);
+  color: var(--muted);
+}
+.empty-state strong { color: var(--text); display: block; margin-bottom: 4px; }
+.empty-state p { margin: 0; font-size: 12.5px; line-height: 1.5; }
+
+.integration-test-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.integration-test-result.ok {
+  background: rgba(0, 255, 136, 0.12);
+  color: var(--green);
+  border: 1px solid rgba(0, 255, 136, 0.35);
+}
+.integration-test-result.error {
+  background: rgba(255, 85, 119, 0.14);
+  color: var(--red);
+  border: 1px solid rgba(255, 85, 119, 0.4);
+}
+
+.evals-detail-empty { color: var(--muted); font-size: 11px; }

@@ -1,5 +1,6 @@
 import { AlertTriangle, ExternalLink, X } from "lucide-react";
 
+import { JsonDetails } from "./JsonDetails";
 import type { ChatResponse } from "../types";
 
 type Props = {
@@ -39,7 +40,7 @@ export function WriteToolPreview({ response, onClose, onOpenObservability }: Pro
         </dl>
         <section>
           <h3>Payload</h3>
-          <pre>{JSON.stringify(result, null, 2)}</pre>
+          <JsonDetails label="Show raw payload" value={result} />
         </section>
         <div className="write-preview-actions">
           <button className="primary" onClick={onOpenObservability} type="button">
