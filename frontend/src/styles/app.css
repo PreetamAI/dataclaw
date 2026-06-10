@@ -3643,13 +3643,16 @@ code, kbd {
 .evals-cases-toolbar {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 12px;
   margin: 6px 0 10px;
+  width: 100%;
 }
 .evals-search {
   position: relative;
-  flex: 1 1 360px;
-  max-width: 520px;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 640px;
 }
 .evals-search-icon {
   position: absolute;
