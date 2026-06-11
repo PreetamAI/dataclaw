@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 from openai import AsyncOpenAI, OpenAIError
 from sqlalchemy import func, or_, select
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.models.domain import (
@@ -3290,9 +3290,17 @@ def _mcp_error_response(
     elif status_code is None and isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
         detail = f"{connector_name} returned HTTP {status_code}."
-    elif status_code is None and isinstance(exc, (OperationalError, DBAPIError)):
+    elif status_code is None and isinstance(exc, (OperationalError, InterfaceError)):
         status_code = 503
         detail = f"{connector_name} could not be reached or rejected credentials."
+    elif status_code is None and isinstance(exc, DBAPIError):
+        # ProgrammingError / DataError / IntegrityError are *query* faults
+        # (e.g. a wrongly schema-qualified table the LLM guessed), not
+        # connectivity. Surface the underlying DB message so the agent can
+        # self-correct its SQL on the next turn instead of giving up as if
+        # the database were unreachable.
+        status_code = 400
+        detail = str(getattr(exc, "orig", exc) or exc).strip() or f"{connector_name} rejected the query."
     scope = "write" if tool_name and tool_name.startswith("write_") else "read"
     action: dict[str, Any] | None = None
     if status_code in {401, 403}:
@@ -3308,7 +3316,7 @@ def _mcp_error_response(
         action = _connector_action(f"Review {connector_name} connector", connector_slug)
     else:
         answer = f"The selected MCP tool failed: {detail}"
-        if status_code in {400, 503} and connector_slug:
+        if status_code == 503 and connector_slug:
             action = _connector_action(f"Configure {connector_name}", connector_slug)
     response = {
         "answer": answer,
@@ -3767,20 +3775,30 @@ async def answer_question(
     seen_schemas: set[str] = set()
     brain_nodes = brain_context.nodes if brain_context else []
     brain_chunks = brain_context.chunks if brain_context else []
+    # Brain nodes carry a name + summary but no column list, while TableAssets
+    # carry the introspected columns. Index columns by bare table name so a
+    # table node can advertise its real columns — otherwise the LLM guesses
+    # column names (e.g. `event_date` instead of `event_at`) and the query fails.
+    columns_by_name: dict[str, Any] = {}
+    for table in tables:
+        if table.columns:
+            columns_by_name.setdefault(table.name.split(".")[-1], table.columns)
     for node in brain_nodes:
         table_name = node.canonical_name
         if table_name in seen_schemas:
             continue
         seen_schemas.add(table_name)
-        schema_context.append(
-            {
-                "source": node.connector_slug,
-                "type": node.type,
-                "name": node.canonical_name,
-                "aliases": node.aliases,
-                "summary": node.summary,
-            }
-        )
+        entry: dict[str, Any] = {
+            "source": node.connector_slug,
+            "type": node.type,
+            "name": node.canonical_name,
+            "aliases": node.aliases,
+            "summary": node.summary,
+        }
+        columns = columns_by_name.get(node.canonical_name.split(".")[-1])
+        if columns:
+            entry["columns"] = columns
+        schema_context.append(entry)
     for chunk in brain_chunks:
         if chunk.metadata.get("asset_type") not in {"table", "column"}:
             continue
@@ -3983,6 +4001,13 @@ async def answer_question(
                 "source, call sqlite_read_query_select, not the postgres equivalent). "
                 "Never assume a table exists on a connector that did not surface it "
                 "in the retrieval trace. "
+                "Schema qualification: Postgres tables live across several schemas "
+                "(e.g. raw, core, public) and the connection's search_path resolves "
+                "unqualified names, so write unqualified table names (e.g. "
+                "`churn_events`, not `core.churn_events`) unless the schema context "
+                "shows the same table name in two schemas. Never default a table to "
+                "the `core` schema — if you qualify, use the exact schema shown for "
+                "that table in the schema context. "
                 "Data vs. metadata: sqlite, postgres, mysql, bigquery, snowflake, "
                 "redshift, databricks, sql_server, and trino are *data* sources — "
                 "their read tools return actual rows. dbt, github, notion, confluence, "

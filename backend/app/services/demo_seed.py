@@ -232,7 +232,11 @@ async def _ensure_sqlite_demo_connector(session: AsyncSession, workspace: Worksp
     if connector is None or connector.encrypted_credentials:
         return
     url = make_url(settings.demo_database_url)
-    if not url.drivername.startswith("sqlite") or not url.database or url.database == ":memory:":
+    # SQLAlchemy's make_url turns "sqlite:///:memory:" into database="/:memory:"
+    # (the leading "/" is the path separator). Strip it before comparing so
+    # the in-memory sentinel is honoured regardless of how it was written.
+    database = (url.database or "").lstrip("/")
+    if not url.drivername.startswith("sqlite") or not database or database == ":memory:":
         return
     connector.encrypted_credentials = encrypt_json(
         settings.master_key,

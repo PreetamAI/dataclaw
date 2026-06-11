@@ -694,8 +694,32 @@ def _default_schema_for_datastore(connector_slug: str, credentials: dict[str, An
     if connector_slug == "trino":
         return str(credentials.get("schema") or "").strip() or None
     if connector_slug in {"postgres", "redshift"}:
+        explicit = str(credentials.get("default_schema") or "").strip()
+        if explicit:
+            # The user may pass a comma-separated search_path (e.g.
+            # "raw,core,public"); the first entry is the "default" we
+            # advertise to tool callers.
+            return explicit.split(",")[0].strip() or "public"
         return "public"
     return None
+
+
+def _engine_kwargs_for_datastore(connector_slug: str, credentials: dict[str, Any]) -> dict[str, Any]:
+    """Return create_async_engine kwargs derived from the connector creds.
+
+    For postgres/redshift, when ``default_schema`` is set on the credentials
+    we apply a server-side ``search_path`` via psycopg's ``options`` param.
+    This is what makes unqualified SQL (``FROM customers``) emitted by an
+    LLM resolve against ``raw.customers`` instead of erroring out.
+    """
+    kwargs: dict[str, Any] = {"pool_pre_ping": True}
+    if connector_slug in {"postgres", "redshift"}:
+        schema = str(credentials.get("default_schema") or "").strip()
+        if schema:
+            # psycopg accepts a libpq-style options string; multiple
+            # comma-separated schemas land as a normal search_path.
+            kwargs["connect_args"] = {"options": f"-c search_path={schema}"}
+    return kwargs
 
 
 async def _workspace(session: AsyncSession) -> Workspace:
@@ -4727,7 +4751,10 @@ async def _sql_datastore_tool(
     user_email: str,
 ) -> dict[str, Any]:
     credentials = await _connector_credentials(session, connector_slug)
-    engine = create_async_engine(_sqlalchemy_url_for_datastore(connector_slug, credentials), pool_pre_ping=True)
+    engine = create_async_engine(
+        _sqlalchemy_url_for_datastore(connector_slug, credentials),
+        **_engine_kwargs_for_datastore(connector_slug, credentials),
+    )
     try:
         if tool_name == "read_list_tables":
             return await _sql_datastore_list_tables(engine, connector_slug, credentials, arguments)

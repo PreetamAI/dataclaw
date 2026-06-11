@@ -1529,6 +1529,14 @@ class PostgresAdapter(BaseAdapter):
             return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{database}"
         return None
 
+    @staticmethod
+    def _engine_kwargs(credentials: dict[str, Any]) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {"pool_pre_ping": True}
+        schema = str(credentials.get("default_schema") or "").strip()
+        if schema:
+            kwargs["connect_args"] = {"options": f"-c search_path={schema}"}
+        return kwargs
+
     async def test(self, credentials: dict[str, Any]) -> TestResult:
         settings = get_settings()
         url = self._build_url(credentials)
@@ -1545,7 +1553,7 @@ class PostgresAdapter(BaseAdapter):
             )
         if not url:
             url = settings.demo_database_url
-        engine = create_async_engine(url, pool_pre_ping=True)
+        engine = create_async_engine(url, **self._engine_kwargs(credentials))
         try:
             async with engine.connect() as conn:
                 value = await conn.scalar(text("select 1"))
@@ -1567,7 +1575,7 @@ class PostgresAdapter(BaseAdapter):
     async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
         settings = get_settings()
         url = self._build_url(credentials) or settings.demo_database_url
-        engine = create_async_engine(url, pool_pre_ping=True)
+        engine = create_async_engine(url, **self._engine_kwargs(credentials))
         try:
             async with engine.connect() as conn:
                 rows = (

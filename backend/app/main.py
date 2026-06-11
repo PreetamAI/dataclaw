@@ -1924,15 +1924,32 @@ async def _persist_chat_response(
 ) -> dict[str, Any]:
     citations = list(response.get("citations") or [])
     # Stash the connector+tool that produced this answer so follow-up turns
-    # can cite it factually instead of guessing (was: "which connector did
-    # that run against?" hallucinating PostgreSQL after a SQLite call).
-    tool_call = response.get("tool_call")
-    if isinstance(tool_call, dict) and tool_call.get("connector_slug"):
-        citations.insert(0, {
+    # can cite it factually instead of guessing. We surface every tool call
+    # for the turn (de-duped) — MCP multi-tool flows populate `tool_calls`
+    # plural while the single-tool path populates `tool_call`; the bubble
+    # UI renders these as "via <connector> · <tool>" pills.
+    seen: set[tuple[str | None, str | None]] = set()
+    provenance: list[dict[str, Any]] = []
+    candidates: list[Any] = []
+    if isinstance(response.get("tool_call"), dict):
+        candidates.append(response["tool_call"])
+    candidates.extend(c for c in (response.get("tool_calls") or []) if isinstance(c, dict))
+    for call in candidates:
+        connector = call.get("connector_slug")
+        tool = call.get("tool") or call.get("tool_name")
+        if not connector:
+            continue
+        key = (connector, tool)
+        if key in seen:
+            continue
+        seen.add(key)
+        provenance.append({
             "type": "tool_call_provenance",
-            "connector": tool_call.get("connector_slug"),
-            "tool": tool_call.get("tool"),
+            "connector": connector,
+            "tool": tool,
         })
+    citations = provenance + citations
+    response["citations"] = citations
     user_message = ChatMessage(thread_id=thread.id, role="user", content=payload.question)
     assistant_kwargs: dict[str, Any] = {
         "thread_id": thread.id,

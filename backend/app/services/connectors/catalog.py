@@ -153,7 +153,7 @@ def catalog() -> list[ConnectorDefinition]:
             category=ConnectorCategory.DATA_STORE,
             logo_key="postgresql",
             docs_url="https://www.postgresql.org/docs/",
-            credential_schema=[CredentialField(name="database_url", label="Database URL", secret=True, required=False, placeholder="postgresql+psycopg://user:pass@host:5432/db"), host_field(), CredentialField(name="port", label="Port", secret=False, placeholder="5432"), CredentialField(name="database", label="Database", secret=False), CredentialField(name="user", label="User", secret=False), token_field("password", "Password")],
+            credential_schema=[CredentialField(name="database_url", label="Database URL", secret=True, required=False, placeholder="postgresql+psycopg://user:pass@host:5432/db"), host_field(), CredentialField(name="port", label="Port", secret=False, placeholder="5432"), CredentialField(name="database", label="Database", secret=False), CredentialField(name="user", label="User", secret=False), token_field("password", "Password"), CredentialField(name="default_schema", label="Default schema (search_path)", secret=False, required=False, placeholder="raw,core,public")],
             local_verification=VerificationMode.DEMO,
             sync_behavior="Real local test connection, schema introspection, row-count sampling, and read-only query execution.",
             production_notes="Uses SQLAlchemy's async psycopg driver with read-only query enforcement.",
