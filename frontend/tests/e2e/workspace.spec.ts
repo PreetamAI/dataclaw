@@ -35,26 +35,37 @@ test("renders Gateway + Editor with empty knowledge base until sync", async ({ p
   await page.route("**/agents/dashboard", (route) =>
     route.fulfill({ json: { agent_cards: [], last_hour_feed: [], runs: [], alerts: [] } }),
   );
+  await page.route("**/worker/status", (route) =>
+    route.fulfill({ json: { status: "ok", worker_status: "running", last_seen_at: "2026-05-15T00:00:00Z", age_seconds: 1 } }),
+  );
+  await page.route("**/llm/providers", (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route("**/llm/catalog", (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route("**/chat/threads", (route) =>
+    route.fulfill({ json: [] }),
+  );
   await page.route("**/connectors/postgres/test", (route) =>
     route.fulfill({ json: { slug: "postgres", status: "ok", mode: "real", message: "PostgreSQL connection succeeded." } }),
   );
 
   await page.goto("/");
-  await page.getByLabel("Admin password").fill("dataclaw-local-admin");
-  await page.getByRole("button", { name: "Sign in" }).click();
 
-  await expect(page.getByRole("tab", { name: /Gateway/ })).toBeVisible();
-  await expect(page.getByRole("tab", { name: /Editor/ })).toBeVisible();
-  await expect(page.getByText("Empty", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /GATEWAY/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /EDITOR/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Ask DataClaw anything/ })).toBeVisible();
 
+  await page.getByRole("button", { name: "Connectors" }).click();
   await expect(page.getByRole("heading", { name: "Connectors" })).toBeVisible();
   await page.locator(".connector-row", { hasText: "PostgreSQL" }).getByRole("button", { name: "Configure" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("button", { name: "Test connection" }).click();
-  await expect(page.getByText("Connection succeeded")).toBeVisible();
+  await expect(page.getByText("Connection succeeded", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Cancel" }).click();
-  await page.getByRole("tab", { name: /Editor/ }).click();
+  await page.getByRole("button", { name: "Chat" }).click();
   await expect(page.getByRole("heading", { name: /Ask DataClaw anything/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Show me daily revenue/ })).toBeVisible();
 });
