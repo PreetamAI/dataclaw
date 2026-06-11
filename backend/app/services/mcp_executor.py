@@ -5,7 +5,9 @@ import base64
 import binascii
 import json
 import logging
+import os
 import re
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
@@ -49,8 +51,52 @@ IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 BQ_PROJECT_IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 CONNECTORS_WITH_NATIVE_WRITE_AUDIT = {"sqlite", "postgres", "mysql", "redshift", "trino", "sql_server", "snowflake"}
 _GENERATED_AIRFLOW_DAGS: dict[str, dict[str, Any]] = {}
-AIRFLOW_APPROVAL_TOOLS = {"write_clear_task_instance", "write_mark_task_failed", "write_delete_dag"}
+AIRFLOW_APPROVAL_TOOLS = {"write_clear_task_instance", "write_mark_task_failed", "write_delete_dag", "write_create_dag"}
 FRESHNESS_TYPES = {"timestamp", "timestamp without time zone", "timestamp with time zone", "timestamptz", "datetime", "date"}
+
+
+def _local_airflow_dags_dir() -> Path | None:
+    value = os.environ.get("DATACLAW_AIRFLOW_DAGS_DIR")
+    if value:
+        return Path(value).expanduser()
+    candidate = Path.cwd().parent / "tests" / "integration" / "airflow" / "dags"
+    return candidate if candidate.exists() else None
+
+
+def _write_local_airflow_dag_file(dag_payload: dict[str, Any]) -> Path | None:
+    dags_dir = _local_airflow_dags_dir()
+    if dags_dir is None:
+        return None
+    dag_id = str(dag_payload.get("dag_id") or "")
+    if not dag_id:
+        return None
+    filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", dag_id).strip("._") or "dataclaw_generated_dag"
+    path = dags_dir / f"{filename}.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(dag_payload.get("source") or ""), encoding="utf-8")
+    return path
+
+
+def _reserialize_local_airflow_dags() -> bool:
+    container = os.environ.get("DATACLAW_AIRFLOW_CONTAINER", "integration-airflow-1")
+    try:
+        completed = subprocess.run(
+            ["docker", "exec", container, "airflow", "dags", "reserialize"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.info("airflow_reserialize_skipped", extra={"_error": exc.__class__.__name__})
+        return False
+    if completed.returncode != 0:
+        logger.info(
+            "airflow_reserialize_failed",
+            extra={"_returncode": completed.returncode, "_stderr": completed.stderr[-500:]},
+        )
+        return False
+    return True
 
 
 def _mapping_value(row: Any, key: str, default: Any = None) -> Any:
@@ -1461,8 +1507,18 @@ async def _airflow_tool(session: AsyncSession, tool_name: str, arguments: dict[s
                 json=dag_payload,
             )
             if response.status_code in {404, 405}:
+                dag_file = _write_local_airflow_dag_file(dag_payload)
+                reserialized = _reserialize_local_airflow_dags() if dag_file else False
                 _GENERATED_AIRFLOW_DAGS[dag_id] = dag_payload
-                return {"status": "created", "dag": dag_payload, "agent_id": agent_id}
+                return {
+                    "status": "created",
+                    "dag": {
+                        **dag_payload,
+                        **({"fileloc": str(dag_file)} if dag_file else {}),
+                    },
+                    "airflow_metadata_refreshed": reserialized,
+                    "agent_id": agent_id,
+                }
             response.raise_for_status()
             return {"status": "created", "dag": response.json(), "agent_id": agent_id}
         if tool_name == "write_pause_dag":

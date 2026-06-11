@@ -8,6 +8,7 @@ import pytest
 import respx
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+import app.services.mcp_executor as mcp_executor
 from app.core.config import get_settings
 from app.core.security import encrypt_json
 from app.db.base import Base
@@ -143,6 +144,46 @@ async def test_airflow_operational_reads_use_bounded_params_and_encoded_paths(
         )
         for url, _, _ in seen
     )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_airflow_create_dag_requires_approval_then_writes_local_file_when_rest_create_is_unsupported(
+    airflow_session: AsyncSession,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    dags_dir = tmp_path / "dags"
+    monkeypatch.setenv("DATACLAW_AIRFLOW_DAGS_DIR", str(dags_dir))
+    monkeypatch.setattr(mcp_executor, "_reserialize_local_airflow_dags", lambda: True)
+    respx.post("http://airflow/api/v1/dags").mock(return_value=httpx.Response(405, json={"detail": "unsupported"}))
+
+    pending = await _airflow_tool(
+        airflow_session,
+        "write_create_dag",
+        {"dag_id": "weekly_revenue"},
+        "agent-1",
+    )
+    assert pending["status"] == "pending_approval"
+
+    result = await _airflow_tool(
+        airflow_session,
+        "write_create_dag",
+        {
+            "dag_id": "weekly_revenue",
+            "schedule_interval": "0 6 * * MON",
+            "source": "from airflow import DAG\ndag_id = 'weekly_revenue'\n",
+            "__approved": True,
+        },
+        "agent-1",
+    )
+
+    dag_file = dags_dir / "weekly_revenue.py"
+    assert result["status"] == "created"
+    assert result["dag"]["dag_id"] == "weekly_revenue"
+    assert result["dag"]["fileloc"] == str(dag_file)
+    assert result["airflow_metadata_refreshed"] is True
+    assert dag_file.read_text(encoding="utf-8") == "from airflow import DAG\ndag_id = 'weekly_revenue'\n"
 
 
 @respx.mock

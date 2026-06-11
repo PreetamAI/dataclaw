@@ -385,7 +385,7 @@ _STABILITY: dict[str, tuple[Stability, list[str], str]] = {
                    ], "Live Fivetran list connectors and sync-history reads passed; trigger-sync returned pending approval and was not executed."),
 
     # 🟡 beta - adapter wired; fixture-backed E2E only; live SaaS E2E pending
-    "airflow":    (Stability.BETA, [], "Fixture-backed DAG reads/source/logs plus trigger/pause/create writes passed with approval gates; first-boot flake mitigated by adapter-level retry (2 attempts, 1s + 3s backoff)."),
+    "airflow":    (Stability.STABLE, [], "Local Airflow read/source/logs plus trigger/pause/create writes passed with approval gates and DAG-file materialization into the mounted Airflow DAG directory."),
     "redshift":   (Stability.BETA, [], "psycopg3 UNICODE codec aliased at adapter import time; live SELECT verified against Redshift Serverless. Live read/write E2E pending."),
     "dbt":        (Stability.STABLE, [], "Acme coverage shard passed 5/5 runs with read_ and write_ tool fixtures exercised against seeded dbt data."),
     "prefect":    (Stability.STABLE, [], "Acme coverage shard passed 5/5 runs with read_ and write_ tool fixtures exercised against seeded Prefect data."),

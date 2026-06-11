@@ -1577,6 +1577,10 @@ def _thread_payload(thread: ChatThread, messages: list[ChatMessage]) -> dict:
                 "rows": message.rows,
                 "chart_spec": message.chart_spec,
                 "action": message.action,
+                "alert_id": (message.retrieval_trace or {}).get("alert_id"),
+                "status": (message.retrieval_trace or {}).get("status"),
+                "tool_call": (message.retrieval_trace or {}).get("tool_call"),
+                "tool_result": (message.retrieval_trace or {}).get("tool_result"),
                 "retrieval_trace": message.retrieval_trace,
                 "trace_id": message.trace_id,
                 "created_at": message.created_at.isoformat(),
@@ -1941,7 +1945,19 @@ async def _persist_chat_response(
         "rows": response.get("rows") or [],
         "chart_spec": response.get("chart_spec"),
         "action": response.get("action"),
-        "retrieval_trace": response.get("retrieval_trace") or {},
+        "retrieval_trace": {
+            **(response.get("retrieval_trace") or {}),
+            **(
+                {
+                    "alert_id": response.get("alert_id"),
+                    "status": response.get("status"),
+                    "tool_call": response.get("tool_call"),
+                    "tool_result": response.get("tool_result"),
+                }
+                if response.get("alert_id") or response.get("tool_call") or response.get("tool_result")
+                else {}
+            ),
+        },
         "trace_id": trace_id,
     }
     if assistant_message_id is not None:

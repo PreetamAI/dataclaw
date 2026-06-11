@@ -354,6 +354,10 @@ export type ChatMessage = {
   sql?: string | null;
   provider?: string | null;
   llm_status?: string | null;
+  status?: string | null;
+  alert_id?: string | null;
+  tool_call?: Record<string, unknown> | null;
+  tool_result?: Record<string, unknown> | null;
   citations: ChatCitation[];
   rows: QueryRow[];
   chart_spec?: Record<string, unknown> | null;

@@ -1,6 +1,7 @@
 from app.services.connectors.catalog import (
     CATALOG_BY_SLUG,
     ConnectorCategory,
+    Stability,
     catalog,
 )
 
@@ -63,3 +64,9 @@ def test_public_catalog_payload_has_no_verification_label() -> None:
     for item in payload:
         assert "local_verification" not in item
         assert "verification" not in item
+
+
+def test_airflow_is_stable_for_demo_catalog() -> None:
+    airflow = CATALOG_BY_SLUG["airflow"]
+    assert airflow.stability == Stability.STABLE
+    assert airflow.known_issues == []

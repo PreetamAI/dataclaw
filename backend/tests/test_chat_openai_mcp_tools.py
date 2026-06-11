@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import app.services.agents.chat as chat_module
 from app.db.base import Base
 from app.models.domain import (
     Agent,
@@ -23,9 +24,11 @@ from app.schemas.api import ChatResponse
 from app.services.agents.chat import (
     OPENAI_MCP_TOOL_LIMIT,
     _combined_tool_answer,
+    _deterministic_mcp_fallback,
     _granted_openai_tools,
     _run_openai_mcp_tool_call,
     _run_openai_mcp_tool_calls,
+    _scenario6_direct_answer,
     _scenario_connector_slugs,
 )
 from app.services.agents.runtime import BudgetExceeded
@@ -114,6 +117,109 @@ async def mcp_session(mcp_database):
         agent = await session.get(Agent, agent_id)
         assert agent is not None
         yield session, tool_engine, agent
+
+
+@pytest.mark.asyncio
+async def test_deterministic_airflow_dag_creation_requests_inline_approval(mcp_session, monkeypatch) -> None:
+    session, tool_engine, agent = mcp_session
+    seen: dict[str, object] = {}
+
+    async def fake_execute_mcp_tool(**kwargs):
+        seen.update(kwargs)
+        return {"status": "pending_approval", "alert_id": "alert-123"}
+
+    monkeypatch.setattr(chat_module, "execute_mcp_tool", fake_execute_mcp_tool)
+
+    payload = await _deterministic_mcp_fallback(
+        session=session,
+        tool_engine=tool_engine,
+        chat_agent=agent,
+        question="Build me an Airflow DAG that materializes weekly_revenue every Monday.",
+        user_email="admin@test.local",
+    )
+
+    assert payload is not None
+    assert seen["connector_slug"] == "airflow"
+    assert seen["tool_name"] == "write_create_dag"
+    assert seen["arguments"]["dag_id"] == "weekly_revenue"
+    assert "__approved" not in seen["arguments"]
+    assert payload["status"] == "pending_approval"
+    assert payload["alert_id"] == "alert-123"
+    assert payload["tool_call"] == {"connector_slug": "airflow", "tool": "write_create_dag"}
+
+
+@pytest.mark.asyncio
+async def test_scenario6_duplicate_payment_customers_uses_business_query(mcp_session, monkeypatch) -> None:
+    session, tool_engine, agent = mcp_session
+
+    async def fake_direct_mcp_call(**kwargs):
+        assert kwargs["connector_slug"] == "postgres"
+        assert kwargs["tool_name"] == "read_query_select"
+        return {
+            "status": "ok",
+            "sql": kwargs["arguments"]["sql"],
+            "rows": [
+                {
+                    "email": "ops@example.com",
+                    "full_name": "Ops Example",
+                    "company": "Acme Ops",
+                    "order_id": 42,
+                    "placed_at": "2026-06-01T00:00:00Z",
+                    "order_status": "fulfilled",
+                    "succeeded_payment_count": 2,
+                    "succeeded_payment_cents": 25800,
+                    "payments": "1:ch_1:12900, 2:ch_2:12900",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(chat_module, "_direct_mcp_call", fake_direct_mcp_call)
+
+    payload = await _scenario6_direct_answer(
+        session=session,
+        tool_engine=tool_engine,
+        chat_agent=agent,
+        question="Which customers have duplicate successful payments, and what orders should finance review?",
+        user_email="admin@test.local",
+        provider_slug="test",
+        retrieval_trace={},
+        run_id=None,
+    )
+
+    assert payload is not None
+    assert payload["tool_call"] == {"connector_slug": "postgres", "tool": "read_query_select"}
+    assert "Customers with duplicate successful payments" in payload["answer"]
+    assert "ops@example.com" in payload["answer"]
+    assert "order 42" in payload["answer"]
+    assert "2 succeeded payments totaling 25800 cents" in payload["answer"]
+
+
+@pytest.mark.asyncio
+async def test_scenario6_airflow_dag_creation_can_request_inline_approval(mcp_session, monkeypatch) -> None:
+    session, tool_engine, agent = mcp_session
+
+    async def fake_direct_mcp_call(**kwargs):
+        return {"status": "pending_approval", "alert_id": "alert-123"}
+
+    monkeypatch.setattr(chat_module, "_direct_mcp_call", fake_direct_mcp_call)
+
+    payload = await _scenario6_direct_answer(
+        session=session,
+        tool_engine=tool_engine,
+        chat_agent=agent,
+        question="Build me an Airflow DAG that materializes weekly_revenue every Monday.",
+        user_email="admin@test.local",
+        provider_slug="test",
+        retrieval_trace={},
+        run_id=None,
+    )
+
+    assert payload is not None
+    assert payload["answer"] == "Creating the Airflow DAG weekly_revenue needs approval. Review and approve it below."
+    assert payload["status"] == "pending_approval"
+    assert payload["llm_status"] == "pending_approval"
+    assert payload["alert_id"] == "alert-123"
+    assert payload["tool_call"] == {"connector_slug": "airflow", "tool": "write_create_dag"}
 
 
 @pytest.mark.asyncio

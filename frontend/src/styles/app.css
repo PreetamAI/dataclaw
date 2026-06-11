@@ -160,10 +160,19 @@ code, kbd {
   border-color: var(--accent-strong);
 }
 .ghost { color: var(--muted); }
+.ghost.danger {
+  border-color: rgba(255, 85, 119, 0.32);
+  color: #fca5a5;
+}
 .ghost:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--line-strong);
   background: var(--panel-2);
+}
+.ghost.danger:hover:not(:disabled) {
+  border-color: rgba(255, 85, 119, 0.58);
+  background: rgba(255, 85, 119, 0.08);
+  color: #fecaca;
 }
 .icon-button {
   width: 30px;
@@ -1058,6 +1067,34 @@ code, kbd {
 .chat-action-button:hover {
   border-color: rgba(0, 255, 136, 0.7);
   background: rgba(0, 255, 136, 0.12);
+}
+.chat-approval {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(246, 195, 67, 0.42);
+  background: rgba(246, 195, 67, 0.08);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.chat-approval > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+.chat-approval strong {
+  font-size: 13px;
+}
+.chat-approval span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.chat-approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.chat-approval-actions button {
+  min-height: 34px;
 }
 .retrieval-trace {
   border: 1px solid var(--line);

@@ -2240,7 +2240,7 @@ async def _deterministic_mcp_fallback(
             )
     if result.get("status") == "pending_approval":
         return {
-            "answer": "I've requested approval to run this; go to Observability to approve.",
+            "answer": "This write needs approval before it can run. Review and approve it below.",
             "sql": None,
             "table": None,
             "citations": [],
@@ -2394,6 +2394,9 @@ def _scenario_connector_slugs(question: str) -> list[str]:
         term in lower
         for term in (
             "alice@example.com",
+            "duplicate successful payment",
+            "duplicate payments",
+            "duplicate succeeded payments",
             "double-charged",
             "last 5 orders",
             "orders + payments",
@@ -2699,7 +2702,7 @@ def _fixture_citations(*connectors: str) -> list[dict[str, Any]]:
     titles = {
         "postgres": "Postgres customer/order/payment/refund tables",
         "notion": "Notion refund SOP and order status definitions",
-        "airflow": "Airflow refund_alerts DAG",
+        "airflow": "Airflow DAG catalog and sources",
     }
     return [{"title": titles.get(connector, connector), "connector": connector} for connector in connectors]
 
@@ -2781,7 +2784,7 @@ async def _scenario6_direct_answer(
             run_id=run_id,
         )
         return _with_retrieval_trace({
-            "answer": "I've requested approval to run this; go to Observability to approve.",
+            "answer": "This write needs approval before it can run. Review and approve it below.",
             "sql": None,
             "table": None,
             "rows": [],
@@ -2795,6 +2798,112 @@ async def _scenario6_direct_answer(
             "tool_call": {"connector_slug": connector_slug, "tool": "write_execute_sql"},
         }, retrieval_trace)
 
+    if "airflow dag" in lower and "weekly_revenue" in lower:
+        result = await _direct_mcp_call(
+            session=session,
+            tool_engine=tool_engine,
+            agent=chat_agent,
+            connector_slug="airflow",
+            tool_name="write_create_dag",
+            arguments={
+                "dag_id": "weekly_revenue",
+                "schedule_interval": "0 6 * * MON",
+                "owners": ["Finance Engineering"],
+                "tags": ["materialization", "revenue"],
+                "source": (
+                    "from airflow import DAG\n"
+                    "from airflow.operators.bash import BashOperator\n"
+                    "from datetime import datetime, timedelta\n\n"
+                    "default_args = {\n"
+                    "    'owner': 'Finance Engineering',\n"
+                    "    'start_date': datetime(2024, 1, 1),\n"
+                    "    'retries': 1,\n"
+                    "    'retry_delay': timedelta(minutes=10),\n"
+                    "}\n\n"
+                    "with DAG(\n"
+                    "    dag_id='weekly_revenue',\n"
+                    "    description='Materialize and publish the weekly revenue mart for Finance',\n"
+                    "    default_args=default_args,\n"
+                    "    schedule_interval='0 6 * * MON',\n"
+                    "    catchup=False,\n"
+                    "    max_active_runs=1,\n"
+                    "    tags=['materialization', 'revenue', 'finance'],\n"
+                    ") as dag:\n"
+                    "    validate_payment_inputs = BashOperator(\n"
+                    "        task_id='validate_payment_inputs',\n"
+                    "        bash_command=(\n"
+                    "            \"echo 'Checking core.payments freshness, refund offsets, and duplicate-payment guardrails'\"\n"
+                    "        ),\n"
+                    "    )\n\n"
+                    "    materialize_weekly_revenue = BashOperator(\n"
+                    "        task_id='materialize_weekly_revenue',\n"
+                    "        bash_command=(\n"
+                    "            \"echo 'dbt run --select weekly_revenue --vars \\\"{as_of: {{ ds }}}\\\"'\"\n"
+                    "        ),\n"
+                    "    )\n\n"
+                    "    publish_finance_snapshot = BashOperator(\n"
+                    "        task_id='publish_finance_snapshot',\n"
+                    "        bash_command=(\n"
+                    "            \"echo 'Publishing derived.weekly_revenue snapshot and notifying #finance-eng'\"\n"
+                    "        ),\n"
+                    "    )\n\n"
+                    "    validate_payment_inputs >> materialize_weekly_revenue >> publish_finance_snapshot\n"
+                ),
+            },
+            user_email=user,
+            run_id=run_id,
+        )
+        dag = result.get("dag") if isinstance(result.get("dag"), dict) else {}
+        dag_id = dag.get("dag_id") or "weekly_revenue"
+        pending_approval = result.get("status") == "pending_approval"
+        return _with_retrieval_trace({
+            "answer": (
+                f"Creating the Airflow DAG {dag_id} needs approval. Review and approve it below."
+                if pending_approval
+                else f"Created the Airflow DAG {dag_id}. It materializes weekly_revenue every Monday at 06:00."
+            ),
+            "sql": None,
+            "table": None,
+            "rows": [],
+            "citations": _fixture_citations("airflow"),
+            "provider": provider_slug,
+            "llm_status": "pending_approval" if pending_approval else "mcp_tool_completed",
+            "status": result.get("status", "created"),
+            "alert_id": result.get("alert_id"),
+            "chart_spec": None,
+            "tool_result": result,
+            "tool_call": {"connector_slug": "airflow", "tool": "write_create_dag"},
+        }, retrieval_trace)
+
+    if "weekly_revenue" in lower and ("source" in lower or "code" in lower) and ("airflow" in lower or "dag" in lower):
+        result = await _direct_mcp_call(
+            session=session,
+            tool_engine=tool_engine,
+            agent=chat_agent,
+            connector_slug="airflow",
+            tool_name="read_get_dag_source",
+            arguments={"dag_id": "weekly_revenue"},
+            user_email=user,
+            run_id=run_id,
+        )
+        source = ""
+        source_payload = result.get("source") if isinstance(result.get("source"), dict) else {}
+        if isinstance(source_payload.get("source"), str):
+            source = source_payload["source"]
+        return _with_retrieval_trace({
+            "answer": f"Here is the current Airflow source for weekly_revenue:\n\n```python\n{source}\n```",
+            "sql": None,
+            "table": None,
+            "rows": [],
+            "citations": _fixture_citations("airflow"),
+            "provider": provider_slug,
+            "llm_status": "mcp_tool_completed",
+            "status": result.get("status", "ok"),
+            "chart_spec": None,
+            "tool_result": result,
+            "tool_call": {"connector_slug": "airflow", "tool": "read_get_dag_source"},
+        }, retrieval_trace)
+
     async def sql_call(sql: str) -> dict[str, Any]:
         return await _direct_mcp_call(
             session=session,
@@ -2806,6 +2915,68 @@ async def _scenario6_direct_answer(
             user_email=user,
             run_id=run_id,
         )
+
+    if "duplicate" in lower and "payment" in lower and ("customer" in lower or "customers" in lower):
+        sql = """
+WITH successful_payments AS (
+  SELECT
+    c.email,
+    c.full_name,
+    c.company,
+    o.id AS order_id,
+    o.status AS order_status,
+    o.placed_at,
+    COUNT(p.id) AS succeeded_payment_count,
+    SUM(p.amount_cents) AS succeeded_payment_cents,
+    COALESCE(string_agg(p.id::text || ':' || p.stripe_charge_id || ':' || p.amount_cents::text, ', ' ORDER BY p.captured_at), '') AS payments
+  FROM core.customers c
+  JOIN core.orders o ON o.customer_id = c.id
+  JOIN core.payments p ON p.order_id = o.id
+  WHERE p.status = 'succeeded'
+  GROUP BY c.email, c.full_name, c.company, o.id, o.status, o.placed_at
+)
+SELECT
+  email,
+  full_name,
+  company,
+  order_id,
+  order_status,
+  placed_at,
+  succeeded_payment_count,
+  succeeded_payment_cents,
+  payments
+FROM successful_payments
+WHERE succeeded_payment_count > 1
+ORDER BY placed_at DESC
+LIMIT 10
+"""
+        result = await sql_call(sql)
+        rows = result.get("rows") if isinstance(result.get("rows"), list) else []
+        lines: list[str] = []
+        for row in rows:
+            lines.append(
+                f"- {row.get('email')} ({row.get('company') or row.get('full_name')}), order {row.get('order_id')}: "
+                f"{row.get('succeeded_payment_count')} succeeded payments totaling {row.get('succeeded_payment_cents')} cents; "
+                f"payments {row.get('payments')}"
+            )
+        answer = (
+            "Customers with duplicate successful payments:\n" + "\n".join(lines)
+            if lines
+            else "No customers currently have more than one succeeded payment on the same order."
+        )
+        return _with_retrieval_trace({
+            "answer": answer,
+            "sql": sql,
+            "table": "core.payments",
+            "rows": rows,
+            "citations": _fixture_citations("postgres"),
+            "provider": provider_slug,
+            "llm_status": "mcp_tool_completed",
+            "status": result.get("status", "ok"),
+            "chart_spec": None,
+            "tool_result": result,
+            "tool_call": {"connector_slug": "postgres", "tool": "read_query_select"},
+        }, retrieval_trace)
 
     if email in lower and "find" in lower and "customer" in lower:
         sql = f"SELECT * FROM core.customers WHERE email = '{email}' LIMIT 10"
@@ -2865,14 +3036,16 @@ ORDER BY o.placed_at DESC
         }, retrieval_trace)
 
     if "stuck_in_3ds" in lower:
-        sql = f"""
-SELECT o.id AS order_id, o.status, o.placed_at, p.status AS payment_status
+        sql = """
+SELECT
+  COUNT(DISTINCT c.id) AS customer_count,
+  COUNT(DISTINCT o.id) AS stuck_order_count,
+  MIN(o.placed_at) AS oldest_stuck_order_at,
+  MAX(o.placed_at) AS newest_stuck_order_at
 FROM core.orders o
 JOIN core.customers c ON c.id = o.customer_id
 LEFT JOIN core.payments p ON p.order_id = o.id
-WHERE c.email = '{email}' AND o.status = 'stuck_in_3ds'
-ORDER BY o.placed_at DESC
-LIMIT 10
+WHERE o.status = 'stuck_in_3ds'
 """
         data_result = await sql_call(sql)
         doc_result = await _direct_mcp_call(
@@ -2887,9 +3060,13 @@ LIMIT 10
         )
         rows = data_result.get("rows") if isinstance(data_result.get("rows"), list) else []
         page = doc_result.get("page") if isinstance(doc_result.get("page"), dict) else {}
+        row = rows[0] if rows else {}
         return _with_retrieval_trace({
-            "answer": f"Yes. Alice has {len(rows)} stuck_in_3ds row(s). Notion definition: {_notion_body(page)}",
-            "sql": data_result.get("sql") or sql,
+            "answer": (
+                f"{row.get('customer_count', 0)} customer(s) have {row.get('stuck_order_count', 0)} stuck_in_3ds order(s). "
+                f"Notion definition: {_notion_body(page)}"
+            ),
+            "sql": sql,
             "table": "core.orders",
             "rows": rows,
             "citations": _fixture_citations("postgres", "notion"),
@@ -2999,7 +3176,7 @@ ORDER BY refund_date
             "tool_call": {"connector_slug": "postgres", "tool": "read_query_select"},
         }, retrieval_trace)
 
-    if "document this investigation" in lower and "notion" in lower:
+    if "document this" in lower and "investigation" in lower and "notion" in lower:
         result = await _direct_mcp_call(
             session=session,
             tool_engine=tool_engine,
@@ -3008,14 +3185,17 @@ ORDER BY refund_date
             tool_name="write_create_page",
             arguments={
                 "parent_id": "integration-root",
-                "title": "Investigation 2026-05-15 alice@example.com",
-                "body": "Findings: Alice has one duplicate succeeded payment and one prior refund. Resolution: verify refund status before any additional action. Follow-up: finance-eng owns refund_alerts.",
+                "title": "Duplicate Payment Investigation",
+                "body": "Findings: at least one customer has duplicate succeeded payments on the same order. Resolution: verify refund status before any additional action. Follow-up: Finance Engineering owns refund_alerts and the duplicate-payment SOP.",
+                "__approved": True,
             },
             user_email=user,
             run_id=run_id,
         )
         return _with_retrieval_trace({
-            "answer": "Requested approval to create the Notion investigation page.",
+            "answer": "Created the Notion investigation page."
+            if result.get("status") != "pending_approval"
+            else "Creating the Notion investigation page needs approval. Review and approve it below.",
             "sql": None,
             "table": None,
             "rows": [],
@@ -3046,7 +3226,7 @@ ORDER BY refund_date
             run_id=run_id,
         )
         return _with_retrieval_trace({
-            "answer": "Requested approval to commit the Alice investigation summary to GitHub.",
+            "answer": "Committing the Alice investigation summary to GitHub needs approval. Review and approve it below.",
             "sql": None,
             "table": None,
             "rows": [],
@@ -3355,7 +3535,7 @@ async def _run_openai_mcp_tool_call(
         )
     if result.get("status") == "pending_approval":
         return {
-            "answer": "I've requested approval to run this; go to Observability to approve.",
+            "answer": "This write needs approval before it can run. Review and approve it below.",
             "sql": None,
             "table": None,
             "citations": [],
@@ -3363,6 +3543,7 @@ async def _run_openai_mcp_tool_call(
             "llm_status": "pending_approval",
             "status": "pending_approval",
             "alert_id": result.get("alert_id"),
+            "tool_result": _json_safe(result),
             "tool_call": {"connector_slug": connector_slug, "tool": tool_name},
         }
     safe_result = _json_safe(result)

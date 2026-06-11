@@ -62,6 +62,52 @@ read by the e2e suite via `tests/integration/acme/common.py`.
 
 ---
 
+## Investor Finance Demo Prompts
+
+For a shorter investor-facing product walkthrough, use the same local
+Postgres, Notion fixture, and Airflow services but lead with the finance
+investigation story:
+
+```text
+Which customers have duplicate successful payments, and what orders should finance review?
+```
+
+Expected: DataClaw runs SQL across `core.customers`, `core.orders`, and
+`core.payments`, returns the formatted SQL, and lists customer/order rows with
+more than one succeeded payment.
+
+```text
+How many customers have stuck_in_3ds orders, and what does Notion say that status means?
+```
+
+Expected: DataClaw queries Postgres for the stuck order count and cites the
+Notion order-status definition for `stuck_in_3ds`.
+
+```text
+Which Airflow DAG owns refund processing, and who owns the runbook?
+```
+
+Expected: DataClaw reads Airflow DAGs, identifies `refund_alerts`, and cites
+Notion ownership context showing Finance Engineering owns the refund workflow.
+
+```text
+Build me an Airflow DAG that materializes weekly_revenue every Monday.
+```
+
+Expected: chat asks for inline approval for `airflow.write_create_dag`. Click
+**Approve** in the chat bubble; the response should change to confirm that
+`weekly_revenue` was created. In local Airflow, DataClaw writes the generated
+DAG file into the mounted Airflow DAG directory when the stable REST API does
+not support DAG creation.
+
+```text
+Document this duplicate payment investigation in Notion.
+```
+
+Expected: DataClaw creates the investigation page through the Notion fixture.
+
+---
+
 ## Steps
 
 The numbered steps below mirror the automated test exactly. Every assertion in the test

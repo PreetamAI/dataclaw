@@ -167,7 +167,7 @@ export const dataclawApi = createApi({
       query: (id) => ({ url: `/alerts/${id}/acknowledge`, method: "POST" }),
       invalidatesTags: ["Observability"],
     }),
-    approveAlert: builder.mutation<{ status: string; alert: ObservabilityEvent }, string>({
+    approveAlert: builder.mutation<{ status: string; alert: ObservabilityEvent; result?: Record<string, unknown> }, string>({
       query: (id) => ({ url: `/alerts/${id}/approve-and-execute`, method: "POST" }),
       invalidatesTags: ["Observability", "Workspace", "Dashboard"],
     }),

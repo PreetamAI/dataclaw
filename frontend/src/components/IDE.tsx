@@ -1,4 +1,4 @@
-import { ChevronDown, Database, FileText, Send, Sparkles, Star, StopCircle, Wrench } from "lucide-react";
+import { CheckCircle2, ChevronDown, Database, FileText, Send, Sparkles, Star, StopCircle, Wrench, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch } from "react-redux";
 
@@ -6,9 +6,9 @@ import { errorMessage } from "../lib/errors";
 import { ChatChart } from "./ChatChart";
 import { CitationDrawer } from "./CitationDrawer";
 import { FeedbackBar } from "./FeedbackBar";
+import { JsonDetails } from "./JsonDetails";
 import { RetrievalTrace } from "./RetrievalTrace";
 import { SqlBlock } from "./SqlBlock";
-import { WriteToolPreview } from "./WriteToolPreview";
 import {
   API,
   dataclawApi,
@@ -16,7 +16,9 @@ import {
   useConnectorsQuery,
   useLlmCatalogQuery,
   useLlmProvidersQuery,
+  useApproveAlertMutation,
   useQueryMutation,
+  useResolveAlertMutation,
 } from "../services/api";
 import type { AppDispatch } from "../store";
 import type { ChatCitation, ChatMessage, ChatResponse, QueryRow, TabName } from "../types";
@@ -38,17 +40,23 @@ type IdeProps = {
 };
 
 type LiveRows = Record<string, QueryRow[]>;
+type ApprovedMessage = {
+  content: string;
+  status: string;
+  llm_status: string;
+  tool_result?: Record<string, unknown> | null;
+};
 
 export function IDE({ activeThreadId, setActiveThreadId, hasKnowledgeBase, onError, setTab }: IdeProps) {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [liveRows, setLiveRows] = useState<LiveRows>({});
+  const [approvedMessages, setApprovedMessages] = useState<Record<string, ApprovedMessage>>({});
   const [model, setModel] = useState<string>("");
   const [modelOpen, setModelOpen] = useState(false);
   const [connectorSlug, setConnectorSlug] = useState<string>("");
   const [connectorOpen, setConnectorOpen] = useState(false);
   const [activeCitation, setActiveCitation] = useState<ChatCitation | null>(null);
-  const [writePreview, setWritePreview] = useState<ChatResponse | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -63,6 +71,8 @@ export function IDE({ activeThreadId, setActiveThreadId, hasKnowledgeBase, onErr
   const { data: providers } = useLlmProvidersQuery();
   const { data: catalog } = useLlmCatalogQuery();
   const [runQuery] = useQueryMutation();
+  const [approveAlert, approveState] = useApproveAlertMutation();
+  const [resolveAlert, resolveState] = useResolveAlertMutation();
 
   const { models: MODELS, defaultModel: DEFAULT_MODEL, providerLabel, providerReady } = useMemo(() => {
     const activeProvider = providers?.find((p) => p.configured);
@@ -166,14 +176,11 @@ export function IDE({ activeThreadId, setActiveThreadId, hasKnowledgeBase, onErr
         signal: abortController.signal,
       });
       setActiveThreadId(response.thread_id);
-      if (response.status === "pending_approval") {
-        setWritePreview(response);
-      }
       dispatch(dataclawApi.util.invalidateTags(["ChatThreads", { type: "ChatThreads", id: response.thread_id }]));
-      if (response.sql) {
+      if (response.sql && response.message_id) {
         try {
           const queryResult = await runQuery({ sql: response.sql, limit: 100, connector_slug: connectorSlug || undefined }).unwrap();
-          setLiveRows((prev) => ({ ...prev, [response.thread_id]: queryResult.rows }));
+          setLiveRows((prev) => ({ ...prev, [response.message_id!]: queryResult.rows }));
         } catch (err) {
           onError(errorMessage(err));
         }
@@ -204,11 +211,51 @@ export function IDE({ activeThreadId, setActiveThreadId, hasKnowledgeBase, onErr
   }
 
   const showWelcome = !activeThreadId && !pending && messages.length === 0;
-  const liveResultRows = activeThreadId ? liveRows[activeThreadId] ?? [] : [];
-  const liveResultColumns = useMemo(
-    () => (liveResultRows.length > 0 ? Object.keys(liveResultRows[0]) : []),
-    [liveResultRows],
+  const latestAssistantMessageId = useMemo(
+    () => [...messages].reverse().find((message) => message.role === "assistant")?.id,
+    [messages],
   );
+
+  async function handleApproveMessage(message: ChatMessage) {
+    if (!message.alert_id) return;
+    try {
+      const result = await approveAlert(message.alert_id).unwrap();
+      const toolResult = result.result;
+      const dag = toolResult?.dag as Record<string, unknown> | undefined;
+      const dagId = typeof dag?.dag_id === "string" ? dag.dag_id : undefined;
+      setApprovedMessages((prev) => ({
+        ...prev,
+        [message.id]: {
+          content: dagId ? `Approved and created Airflow DAG ${dagId}.` : "Approved and executed the requested write.",
+          status: "executed",
+          llm_status: "mcp_tool_completed",
+          tool_result: toolResult ?? null,
+        },
+      }));
+      dispatch(dataclawApi.util.invalidateTags(["Observability", "ChatThreads", "Workspace", "Dashboard"]));
+    } catch (err) {
+      onError(errorMessage(err));
+    }
+  }
+
+  async function handleRejectMessage(message: ChatMessage) {
+    if (!message.alert_id) return;
+    try {
+      await resolveAlert(message.alert_id).unwrap();
+      setApprovedMessages((prev) => ({
+        ...prev,
+        [message.id]: {
+          content: "Rejected this write request. No changes were executed.",
+          status: "rejected",
+          llm_status: "approval_rejected",
+          tool_result: message.tool_result ?? null,
+        },
+      }));
+      dispatch(dataclawApi.util.invalidateTags(["Observability", "ChatThreads"]));
+    } catch (err) {
+      onError(errorMessage(err));
+    }
+  }
 
   return (
     <section className="editor">
@@ -245,10 +292,14 @@ export function IDE({ activeThreadId, setActiveThreadId, hasKnowledgeBase, onErr
           <ChatBubble
             key={message.id}
             message={message}
-            liveRows={liveResultRows}
-            liveColumns={liveResultColumns}
+            liveRows={message.id === latestAssistantMessageId ? liveRows[message.id] ?? [] : []}
             onCitationClick={setActiveCitation}
             setTab={setTab}
+            approvedMessage={approvedMessages[message.id]}
+            approving={approveState.isLoading}
+            rejecting={resolveState.isLoading}
+            onApprove={() => handleApproveMessage(message)}
+            onReject={() => handleRejectMessage(message)}
           />
         ))}
 
@@ -426,14 +477,6 @@ export function IDE({ activeThreadId, setActiveThreadId, hasKnowledgeBase, onErr
         </div>
       </form>
       <CitationDrawer citation={activeCitation} onClose={() => setActiveCitation(null)} />
-      <WriteToolPreview
-        response={writePreview}
-        onClose={() => setWritePreview(null)}
-        onOpenObservability={() => {
-          setWritePreview(null);
-          setTab?.("Gateway");
-        }}
-      />
     </section>
   );
 }
@@ -523,15 +566,23 @@ function parseSseFrame(frame: string): { event: string; data: Record<string, unk
 function ChatBubble({
   message,
   liveRows,
-  liveColumns,
   onCitationClick,
   setTab,
+  approvedMessage,
+  approving,
+  rejecting,
+  onApprove,
+  onReject,
 }: {
   message: ChatMessage;
   liveRows: QueryRow[];
-  liveColumns: string[];
   onCitationClick: (citation: ChatCitation) => void;
   setTab?: (tab: TabName) => void;
+  approvedMessage?: ApprovedMessage;
+  approving?: boolean;
+  rejecting?: boolean;
+  onApprove?: () => void;
+  onReject?: () => void;
 }) {
   if (message.role === "user") {
     return (
@@ -540,16 +591,43 @@ function ChatBubble({
       </div>
     );
   }
+  const effectiveContent = approvedMessage?.content ?? message.content;
+  const effectiveStatus = approvedMessage?.status ?? message.status;
+  const effectiveLlmStatus = approvedMessage?.llm_status ?? message.llm_status;
+  const effectiveToolResult = approvedMessage?.tool_result ?? message.tool_result;
+  const messageRows = liveRows.length > 0 ? liveRows : message.rows ?? [];
+  const messageColumns = messageRows.length > 0 ? Object.keys(messageRows[0]) : [];
+  const isPendingApproval = effectiveStatus === "pending_approval" || effectiveLlmStatus === "pending_approval";
+  const toolCall = message.tool_call ?? {};
+  const connector = String(toolCall.connector_slug ?? "connector");
+  const tool = String(toolCall.tool ?? "write tool");
   const provenanceCitations = message.citations.filter((c) => c.type === "tool_call_provenance");
   const sourceCitations = message.citations.filter((c) => c.type !== "tool_call_provenance");
   return (
     <div className="bubble assistant">
       {message.provider ? (
         <span className="bubble-meta">
-          {message.provider} · {message.llm_status}
+          {message.provider} · {effectiveLlmStatus}
         </span>
       ) : null}
-      <p>{message.content}</p>
+      <p>{effectiveContent}</p>
+      {isPendingApproval && message.alert_id ? (
+        <div className="chat-approval">
+          <div>
+            <strong>Approve this write?</strong>
+            <span>{connector}.{tool}</span>
+          </div>
+          <div className="chat-approval-actions">
+            <button className="primary" disabled={approving || rejecting} onClick={onApprove} type="button">
+              <CheckCircle2 size={13} /> Approve
+            </button>
+            <button className="ghost danger" disabled={approving || rejecting} onClick={onReject} type="button">
+              <XCircle size={13} /> Reject
+            </button>
+          </div>
+          {effectiveToolResult ? <JsonDetails label="Advanced payload" value={effectiveToolResult} /> : null}
+        </div>
+      ) : null}
       {message.sql ? <SqlBlock sql={message.sql} /> : null}
       {message.chart_spec ? <ChatChart spec={message.chart_spec} /> : null}
       {message.action && setTab ? (
@@ -558,25 +636,25 @@ function ChatBubble({
         </button>
       ) : null}
       <RetrievalTrace trace={message.retrieval_trace} />
-      {liveColumns.length > 0 ? (
+      {messageColumns.length > 0 ? (
         <div className="editor-results">
           <table>
             <thead>
               <tr>
-                {liveColumns.map((column) => (
+                {messageColumns.map((column) => (
                   <th key={column}>{column}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {liveRows.map((row, index) => {
-                const rowKey = liveColumns
+              {messageRows.map((row, index) => {
+                const rowKey = messageColumns
                   .slice(0, 3)
                   .map((column) => String(row[column] ?? ""))
                   .join("␟") || `row-${index}`;
                 return (
                   <tr key={rowKey}>
-                    {liveColumns.map((column) => (
+                    {messageColumns.map((column) => (
                       <td key={column}>{String(row[column])}</td>
                     ))}
                   </tr>
