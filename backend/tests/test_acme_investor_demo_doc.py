@@ -20,13 +20,15 @@ def test_acme_investor_demo_seed_supports_duplicate_payment_story() -> None:
     assert "refund_alerts" in doc
     assert "weekly_revenue" in doc
 
-    assert "alice@example.com" in seed
-    assert "alice_duplicate_payment" in seed
+    assert "priya.shah@northstar-retail.example" in seed
+    assert "Northstar Retail Group" in seed
+    assert "northstar_duplicate_payment" in seed
     assert "'stuck_in_3ds'" in seed
     assert "INSERT INTO core.refunds" in seed
     assert '"page-order-status-definitions"' in fixture_api
     assert '"page-ownership-runbook"' in fixture_api
     assert '"page-refund-alerts-sop"' in fixture_api
+    assert '"page-duplicate-payment-runbook"' in fixture_api
 
 
 def test_acme_investor_demo_prompts_match_direct_chat_hooks() -> None:

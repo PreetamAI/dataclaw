@@ -74,7 +74,9 @@ Which customers have duplicate successful payments, and what orders should finan
 
 Expected: DataClaw runs SQL across `core.customers`, `core.orders`, and
 `core.payments`, returns the formatted SQL, and lists customer/order rows with
-more than one succeeded payment.
+more than one succeeded payment. The deterministic finance incident is Priya
+Shah at **Northstar Retail Group**, a synthetic enterprise account with a
+duplicate Stripe retry on the latest subscription order.
 
 ```text
 How many customers have stuck_in_3ds orders, and what does Notion say that status means?
@@ -88,7 +90,8 @@ Which Airflow DAG owns refund processing, and who owns the runbook?
 ```
 
 Expected: DataClaw reads Airflow DAGs, identifies `refund_alerts`, and cites
-Notion ownership context showing Finance Engineering owns the refund workflow.
+Notion ownership context showing Finance Engineering owns the refund workflow
+and the duplicate-payment runbook for enterprise escalations.
 
 ```text
 Build me an Airflow DAG that materializes weekly_revenue every Monday.
@@ -104,7 +107,8 @@ not support DAG creation.
 Document this duplicate payment investigation in Notion.
 ```
 
-Expected: DataClaw creates the investigation page through the Notion fixture.
+Expected: DataClaw creates the investigation page through the Notion fixture,
+documenting the Northstar Retail Group duplicate-payment incident.
 
 ---
 

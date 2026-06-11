@@ -253,7 +253,12 @@ NOTION_FIXTURES: dict[str, dict] = {
     },
     "page-ownership-runbook": {
         "title": "Ownership Runbook",
-        "body": "Analytics owns [[orders]], [[customers]], and the [[daily_orders_refresh]] pipeline. Finance Engineering owns [[refund_alerts]] and the Refund Alerts SOP.",
+        "body": (
+            "Analytics owns [[orders]], [[customers]], and the [[daily_orders_refresh]] pipeline. "
+            "Finance Engineering owns [[refund_alerts]], [[payments_reconciliation]], and the Duplicate "
+            "Payment Investigation runbook. Customer escalations from enterprise accounts, including "
+            "Northstar Retail Group, route to finance-eng@dataclaw.com before Support issues credits."
+        ),
     },
     "page-refund-alerts-sop": {
         "title": "Refund Alerts SOP",
@@ -261,10 +266,21 @@ NOTION_FIXTURES: dict[str, dict] = {
             "Refund Alerts SOP. The refund_alerts Airflow DAG monitors core.refunds every 15 minutes. "
             "If a customer reports a double charge, first confirm core.customers.email, then join "
             "core.orders, core.payments, and core.refunds. A duplicate charge is any order with more "
-            "than one succeeded payment for the same order_id. If a prior refund exists, verify the "
-            "refund reason and issued_at timestamp before creating a new refund. Owner: "
+            "than one succeeded payment for the same order_id. For enterprise accounts such as "
+            "Northstar Retail Group, verify the Stripe charge ids, check whether a prior refund exists, "
+            "and confirm refund reason plus issued_at timestamp before creating a new refund. Owner: "
             "finance-eng@dataclaw.com. Escalate unresolved duplicate-payment incidents to "
             "#finance-eng-oncall."
+        ),
+    },
+    "page-duplicate-payment-runbook": {
+        "title": "Duplicate Payment Investigation Runbook",
+        "body": (
+            "Duplicate Payment Investigation Runbook. Start with core.customers.email, then inspect "
+            "core.orders and core.payments for multiple succeeded charges on one order. Known demo "
+            "case: Priya Shah at Northstar Retail Group reported a duplicate enterprise subscription "
+            "charge after a payment retry. Finance should review the affected order, the original "
+            "Stripe charge, the retry charge, and any existing core.refunds row before issuing a credit."
         ),
     },
     "page-order-status-definitions": {

@@ -2393,7 +2393,8 @@ def _scenario_connector_slugs(question: str) -> list[str]:
     if any(
         term in lower
         for term in (
-            "alice@example.com",
+            "priya.shah@northstar-retail.example",
+            "northstar retail",
             "duplicate successful payment",
             "duplicate payments",
             "duplicate succeeded payments",
@@ -2768,7 +2769,7 @@ async def _scenario6_direct_answer(
     if not tool_engine or not chat_agent:
         return None
     lower = question.lower()
-    email = "alice@example.com"
+    email = "priya.shah@northstar-retail.example"
     user = user_email or "system"
 
     if "drop" in lower and "test_summary" in lower:
@@ -3022,7 +3023,7 @@ ORDER BY o.placed_at DESC
         rows = result.get("rows") if isinstance(result.get("rows"), list) else []
         lines = [f"- order {row.get('order_id')}: {row.get('status')}; payments {row.get('payments') or 'none'}" for row in rows]
         return _with_retrieval_trace({
-            "answer": "Alice's last 5 distinct orders and payments:\n" + "\n".join(lines),
+            "answer": "Northstar Retail Group's last 5 distinct orders and payments:\n" + "\n".join(lines),
             "sql": result.get("sql") or sql,
             "table": "core.orders",
             "rows": rows,
@@ -3163,7 +3164,7 @@ ORDER BY refund_date
         result = await sql_call(sql)
         rows = result.get("rows") if isinstance(result.get("rows"), list) else []
         return _with_retrieval_trace({
-            "answer": f"Yes. Alice has {sum(int(row.get('refund_count') or 0) for row in rows)} refund(s) in the last 90 days.",
+            "answer": f"Yes. Northstar Retail Group has {sum(int(row.get('refund_count') or 0) for row in rows)} refund(s) in the last 90 days.",
             "sql": result.get("sql") or sql,
             "table": "core.refunds",
             "rows": rows,
@@ -3186,7 +3187,12 @@ ORDER BY refund_date
             arguments={
                 "parent_id": "integration-root",
                 "title": "Duplicate Payment Investigation",
-                "body": "Findings: at least one customer has duplicate succeeded payments on the same order. Resolution: verify refund status before any additional action. Follow-up: Finance Engineering owns refund_alerts and the duplicate-payment SOP.",
+                "body": (
+                    "Findings: Priya Shah at Northstar Retail Group has a duplicate succeeded payment "
+                    "on the same enterprise subscription order. Resolution: verify Stripe charge ids "
+                    "and refund status before any Support credit. Follow-up: Finance Engineering owns "
+                    "refund_alerts, payments_reconciliation, and the duplicate-payment runbook."
+                ),
                 "__approved": True,
             },
             user_email=user,
@@ -3209,7 +3215,7 @@ ORDER BY refund_date
             "tool_call": {"connector_slug": "notion", "tool": "write_create_page"},
         }, retrieval_trace)
 
-    if "commit" in lower and "alice" in lower and "incidents/" in lower:
+    if "commit" in lower and ("northstar" in lower or "priya" in lower) and "incidents/" in lower:
         result = await _direct_mcp_call(
             session=session,
             tool_engine=tool_engine,
@@ -3218,15 +3224,21 @@ ORDER BY refund_date
             tool_name="write_commit_file",
             arguments={
                 "repo": "dataclaw/analytics",
-                "path": "incidents/2026-05-15-alice.md",
-                "message": "Document Alice double-charge investigation",
-                "content": "# Investigation 2026-05-15 alice@example.com\n\nFindings: Alice has one duplicate succeeded payment on the latest fulfilled order and one prior refund in the last 90 days.\n\nResolution: finance-eng to verify the refund status before additional action.\n",
+                "path": "incidents/2026-06-07-northstar-retail.md",
+                "message": "Document Northstar duplicate-payment investigation",
+                "content": (
+                    "# Investigation 2026-06-07 Northstar Retail Group\n\n"
+                    "Findings: Priya Shah reported one duplicate succeeded payment on the latest "
+                    "enterprise subscription order and one prior refund in the last 90 days.\n\n"
+                    "Resolution: finance-eng to verify the Stripe charge ids and refund status before "
+                    "Support issues any credit.\n"
+                ),
             },
             user_email=user,
             run_id=run_id,
         )
         return _with_retrieval_trace({
-            "answer": "Committing the Alice investigation summary to GitHub needs approval. Review and approve it below.",
+            "answer": "Committing the Northstar investigation summary to GitHub needs approval. Review and approve it below.",
             "sql": None,
             "table": None,
             "rows": [],

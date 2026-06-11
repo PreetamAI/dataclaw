@@ -76,6 +76,8 @@ def seed_notion() -> dict[str, Any]:
         "Customers data model": "data_model_page_id",
         "Churn definition": "churn_page_id",
         "On-call runbook": "runbook_page_id",
+        "Finance duplicate-payment runbook": "duplicate_payment_runbook_page_id",
+        "Order status definitions": "order_status_definitions_page_id",
     }
     for title, body in ACME_DOCS.items():
         existing = notion.search(

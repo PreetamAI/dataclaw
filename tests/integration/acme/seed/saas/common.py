@@ -40,6 +40,18 @@ ACME_DOCS = {
         "acme_revenue_recalc, Snowflake ACME.MARTS.REVENUE_DAILY, and the Confluence "
         "Postgres to BigQuery pipeline page before paging finance engineering."
     ),
+    "Finance duplicate-payment runbook": (
+        "Finance Engineering owns duplicate-payment review for enterprise customers. "
+        "For Northstar Retail Group, start with core.customers.email, inspect core.orders "
+        "and core.payments for multiple succeeded charges on one order, then check "
+        "core.refunds before Support issues a credit. The refund_alerts and "
+        "payments_reconciliation Airflow DAGs provide operational context."
+    ),
+    "Order status definitions": (
+        "stuck_in_3ds means the payment is blocked in the 3-D Secure authentication flow "
+        "and the customer has not completed the issuer challenge. It is not successful "
+        "revenue until core.payments.status becomes succeeded."
+    ),
 }
 
 ACME_DBT_FILES = {

@@ -160,9 +160,9 @@ async def test_scenario6_duplicate_payment_customers_uses_business_query(mcp_ses
             "sql": kwargs["arguments"]["sql"],
             "rows": [
                 {
-                    "email": "ops@example.com",
-                    "full_name": "Ops Example",
-                    "company": "Acme Ops",
+                    "email": "priya.shah@northstar-retail.example",
+                    "full_name": "Priya Shah",
+                    "company": "Northstar Retail Group",
                     "order_id": 42,
                     "placed_at": "2026-06-01T00:00:00Z",
                     "order_status": "fulfilled",
@@ -189,7 +189,7 @@ async def test_scenario6_duplicate_payment_customers_uses_business_query(mcp_ses
     assert payload is not None
     assert payload["tool_call"] == {"connector_slug": "postgres", "tool": "read_query_select"}
     assert "Customers with duplicate successful payments" in payload["answer"]
-    assert "ops@example.com" in payload["answer"]
+    assert "Northstar Retail Group" in payload["answer"]
     assert "order 42" in payload["answer"]
     assert "2 succeeded payments totaling 25800 cents" in payload["answer"]
 

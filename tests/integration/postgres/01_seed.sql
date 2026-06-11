@@ -340,62 +340,71 @@ FROM core.payments p
 JOIN core.orders o ON o.id = p.order_id
 WHERE o.refunded_at IS NOT NULL;
 
--- Scenario 6 fixture: customer complaint investigation for alice@example.com.
-WITH alice AS (
+-- Scenario 6 fixture: realistic finance incident for Northstar Retail Group.
+-- Northstar is a synthetic enterprise customer used across Postgres, Notion,
+-- and Airflow demo fixtures.
+WITH northstar AS (
     INSERT INTO core.customers (email, full_name, company, plan, country_code, created_at)
-    VALUES ('alice@example.com', 'Alice Example', 'Acme Coffee', 'pro', 'US', now() - interval '180 days')
+    VALUES (
+        'priya.shah@northstar-retail.example',
+        'Priya Shah',
+        'Northstar Retail Group',
+        'enterprise',
+        'US',
+        now() - interval '180 days'
+    )
     RETURNING id
 ),
-alice_orders AS (
+northstar_orders AS (
     INSERT INTO core.orders (customer_id, status, total_cents, currency, placed_at, fulfilled_at, refunded_at)
-    SELECT alice.id, data.status, data.total_cents, 'USD', data.placed_at, data.fulfilled_at, data.refunded_at
-    FROM alice
+    SELECT northstar.id, data.status, data.total_cents, 'USD', data.placed_at, data.fulfilled_at, data.refunded_at
+    FROM northstar
     CROSS JOIN (
         VALUES
-            ('fulfilled', 12900, now() - interval '12 hours', now() - interval '11 hours', NULL::timestamptz),
-            ('stuck_in_3ds', 12900, now() - interval '1 day', NULL::timestamptz, NULL::timestamptz),
-            ('refunded', 25900, now() - interval '7 days', now() - interval '6 days 23 hours', now() - interval '6 days 22 hours'),
-            ('fulfilled', 9900, now() - interval '30 days', now() - interval '29 days 23 hours', NULL::timestamptz),
-            ('fulfilled', 4900, now() - interval '75 days', now() - interval '74 days 23 hours', NULL::timestamptz)
+            ('fulfilled', 154900, now() - interval '12 hours', now() - interval '11 hours', NULL::timestamptz),
+            ('stuck_in_3ds', 154900, now() - interval '1 day', NULL::timestamptz, NULL::timestamptz),
+            ('refunded', 489900, now() - interval '7 days', now() - interval '6 days 23 hours', now() - interval '6 days 22 hours'),
+            ('fulfilled', 249900, now() - interval '30 days', now() - interval '29 days 23 hours', NULL::timestamptz),
+            ('fulfilled', 99900, now() - interval '75 days', now() - interval '74 days 23 hours', NULL::timestamptz)
     ) AS data(status, total_cents, placed_at, fulfilled_at, refunded_at)
     RETURNING id, status, total_cents, placed_at, refunded_at
 ),
-alice_primary_payments AS (
+northstar_primary_payments AS (
     INSERT INTO core.payments (order_id, stripe_charge_id, amount_cents, status, method, captured_at)
     SELECT
         id,
-        'ch_alice_' || id::text,
+        'ch_northstar_' || id::text,
         total_cents,
         CASE WHEN status = 'stuck_in_3ds' THEN 'failed' ELSE 'succeeded' END,
         'card',
         placed_at + interval '1 minute'
-    FROM alice_orders
+    FROM northstar_orders
     RETURNING id, order_id, amount_cents
 ),
-alice_duplicate_payment AS (
+northstar_duplicate_payment AS (
     INSERT INTO core.payments (order_id, stripe_charge_id, amount_cents, status, method, captured_at)
     SELECT
         id,
-        'ch_alice_duplicate_' || id::text,
+        'ch_northstar_retry_duplicate_' || id::text,
         total_cents,
         'succeeded',
         'card',
         placed_at + interval '2 minutes'
-    FROM alice_orders
+    FROM northstar_orders
     WHERE status = 'fulfilled'
     ORDER BY placed_at DESC
     LIMIT 1
     RETURNING id, order_id, amount_cents
 ),
-alice_payments AS (
-    SELECT * FROM alice_primary_payments
+northstar_payments AS (
+    SELECT * FROM northstar_primary_payments
     UNION ALL
-    SELECT * FROM alice_duplicate_payment
+    SELECT * FROM northstar_duplicate_payment
 )
 INSERT INTO core.refunds (payment_id, amount_cents, reason, issued_at)
 SELECT p.id, p.amount_cents, 'duplicate', o.refunded_at
-FROM alice_payments p
-JOIN alice_orders o ON o.id = p.order_id
+FROM northstar_payments p
+JOIN northstar_orders o ON o.id = p.order_id
 WHERE o.status = 'refunded';
 
 -- =====================================================================
