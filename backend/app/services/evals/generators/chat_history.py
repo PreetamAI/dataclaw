@@ -34,7 +34,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.domain import ChatMessage, ChatThread, Feedback
 from app.services.evals.generators.base import CandidateCase
 
-
 # Skip turns longer than this when reconstructing the question; the chat
 # normalize step caps at ~512 chars anyway and a multi-paragraph "question"
 # is almost always a paste, not a real ask.
