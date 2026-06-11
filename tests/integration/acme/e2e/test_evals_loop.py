@@ -1,6 +1,6 @@
 """End-to-end Acme evals loop on Postgres + Notion + Airflow.
 
-Walks the canonical investor-demo flow against the running app:
+Walks the canonical Acme evals flow against the running app:
 
     connect/sync → chat → feedback → eval case → approve → promote-golden
     → chat short-circuit → run evals → diagnose → apply suggestion
@@ -13,7 +13,7 @@ run, ``RUN_ACME_E2E=1``).
 
 The chat short-circuit step + run+diagnose+apply step pin SQL to a known
 canonical query so the test fails honestly if the chat agent drifts off
-the documented investor-demo path.
+the documented Acme evals path.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from tests.integration.acme.e2e.helpers import (
 pytestmark = pytest.mark.integration
 
 
-# The canonical investor-demo question + golden artefacts. Kept inline so
+# The canonical Acme evals question + golden artefacts. Kept inline so
 # the test is the single source of truth for "the state two operators
 # should reproduce".
 ACME_QUESTION = (

@@ -3,22 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DOC = REPO_ROOT / "docs" / "ACME_INVESTOR_DEMO.md"
 CHAT = REPO_ROOT / "backend" / "app" / "services" / "agents" / "chat.py"
 POSTGRES_SEED = REPO_ROOT / "tests" / "integration" / "postgres" / "01_seed.sql"
 ORCHESTRATION_API = REPO_ROOT / "tests" / "integration" / "services" / "orchestration_api.py"
 
 
-def test_acme_investor_demo_seed_supports_duplicate_payment_story() -> None:
-    doc = DOC.read_text()
+def test_acme_finance_demo_seed_supports_duplicate_payment_story() -> None:
     seed = POSTGRES_SEED.read_text()
     fixture_api = ORCHESTRATION_API.read_text()
-
-    assert "Which customers have duplicate successful payments" in doc
-    assert "duplicate successful payments" in doc
-    assert "stuck_in_3ds" in doc
-    assert "refund_alerts" in doc
-    assert "weekly_revenue" in doc
 
     assert "priya.shah@northstar-retail.example" in seed
     assert "Northstar Retail Group" in seed
@@ -31,19 +23,8 @@ def test_acme_investor_demo_seed_supports_duplicate_payment_story() -> None:
     assert '"page-duplicate-payment-runbook"' in fixture_api
 
 
-def test_acme_investor_demo_prompts_match_direct_chat_hooks() -> None:
-    doc = DOC.read_text()
+def test_acme_finance_demo_direct_chat_hooks_exist() -> None:
     chat = CHAT.read_text()
-
-    expected_prompts = [
-        "Which customers have duplicate successful payments, and what orders should finance review?",
-        "How many customers have stuck_in_3ds orders, and what does Notion say that status means?",
-        "Which Airflow DAG owns refund processing, and who owns the runbook?",
-        "Build me an Airflow DAG that materializes weekly_revenue every Monday.",
-        "Document this duplicate payment investigation in Notion.",
-    ]
-    for prompt in expected_prompts:
-        assert prompt in doc
 
     assert 'if "duplicate" in lower and "payment" in lower and ("customer" in lower or "customers" in lower):' in chat
     assert "Customers with duplicate successful payments" in chat
