@@ -41,6 +41,8 @@ class SchemaProducer:
         for table, dataset, connector in rows:
             if len(candidates) >= limit:
                 break
+            if _is_system_table(dataset.schema_name, table.name):
+                continue
             connector_slug = connector.slug if connector else None
             qualified = _qualify(dataset.schema_name, table.name)
             cite = [
@@ -107,6 +109,27 @@ _SQL_CONNECTORS = frozenset(
         "sqlite",
     }
 )
+
+
+_SYSTEM_SCHEMA_PREFIXES = ("pg_", "sqlite_")
+_SYSTEM_SCHEMAS = frozenset({"information_schema", "pg_catalog", "sys", "mysql"})
+_SYSTEM_TABLE_PREFIXES = ("pg_", "sqlite_", "_airbyte_", "alembic_")
+
+
+def _is_system_table(schema_name: str | None, table_name: str) -> bool:
+    """Filter out catalog and bookkeeping tables — they're noise in the eval
+    queue and the chat agent can't meaningfully answer questions about them
+    in most workspaces. Conservative list: misclassifying a user table as
+    system is worse than letting one through."""
+    schema = (schema_name or "").lower()
+    table = (table_name or "").lower()
+    if schema in _SYSTEM_SCHEMAS:
+        return True
+    if any(schema.startswith(p) for p in _SYSTEM_SCHEMA_PREFIXES):
+        return True
+    if any(table.startswith(p) for p in _SYSTEM_TABLE_PREFIXES):
+        return True
+    return False
 
 
 def _qualify(schema_name: str | None, table_name: str) -> str:

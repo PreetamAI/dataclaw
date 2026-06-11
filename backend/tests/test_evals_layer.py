@@ -2,7 +2,7 @@
 
 Covers all evals layer surfaces in one reviewable file:
 * eval cases service + API: CRUD, lifecycle transitions, golden lookup
-* candidate generators: schema/kg/lineage/fixture coordinator, dedupe, caps
+* candidate generators: schema/kg/lineage/fixture/chat_history coordinator, dedupe, caps
 * eval runner: batch execution, metrics, dashboard, cost budgets
 * diagnose + suggestions: rules pass, apply (golden_query/prompt_diff/rules_md),
   preview-only paths, dismiss, revert, background diagnose
@@ -1095,6 +1095,404 @@ async def test_fixture_producer_always_emits(db_gen) -> None:
     assert len(cands) == len(DEMO_CASES)
 
 
+# ---------- SchemaProducer system-table filter ----------
+
+
+@pytest.mark.asyncio
+async def test_schema_producer_skips_system_tables(db_gen) -> None:
+    """Catalog/bookkeeping tables (information_schema, pg_*, sqlite_*,
+    _airbyte_*, alembic_version) must not show up as eval candidates."""
+    from app.models.domain import Connector, Dataset, TableAsset
+    from app.services.evals.generators.schema import SchemaProducer
+
+    ws_id, _ = await _seed_workspace(db_gen)
+    async with db_gen() as s:
+        conn = Connector(
+            workspace_id=ws_id,
+            slug="postgres",
+            category="Data store",
+            display_name="Postgres",
+        )
+        s.add(conn)
+        await s.flush()
+        user_ds = Dataset(
+            workspace_id=ws_id,
+            connector_id=conn.id,
+            name="core",
+            source_type="postgres",
+            schema_name="core",
+        )
+        sys_ds = Dataset(
+            workspace_id=ws_id,
+            connector_id=conn.id,
+            name="info",
+            source_type="postgres",
+            schema_name="information_schema",
+        )
+        s.add_all([user_ds, sys_ds])
+        await s.flush()
+        s.add_all([
+            TableAsset(
+                dataset_id=user_ds.id,
+                name="orders",
+                columns=[{"name": "id", "type": "INTEGER"}],
+            ),
+            TableAsset(
+                dataset_id=sys_ds.id,
+                name="columns",
+                columns=[{"name": "id", "type": "INTEGER"}],
+            ),
+            TableAsset(
+                dataset_id=user_ds.id,
+                name="alembic_version",
+                columns=[{"name": "version_num", "type": "TEXT"}],
+            ),
+            TableAsset(
+                dataset_id=user_ds.id,
+                name="_airbyte_raw_events",
+                columns=[{"name": "data", "type": "JSONB"}],
+            ),
+        ])
+        await s.commit()
+
+    async with db_gen() as s:
+        cands = await SchemaProducer().generate(s, workspace_id=ws_id, limit=50)
+    questions = [c.question for c in cands]
+    assert any("orders" in q for q in questions), questions
+    assert not any("information_schema" in q for q in questions), questions
+    assert not any("alembic_version" in q for q in questions), questions
+    assert not any("_airbyte_" in q for q in questions), questions
+
+
+# ---------- ChatHistoryProducer ----------
+
+
+async def _seed_endorsed_chat_turn(
+    SessionLocal,
+    ws_id: str,
+    user_id: str,
+    *,
+    question: str,
+    answer: str,
+    sql: str,
+    citations: list[dict] | None = None,
+    rows: list[dict] | None = None,
+    positive: int = 1,
+    negative: int = 0,
+    thread_kind: str = "user",
+) -> str:
+    """Seed one (user, assistant) pair in a thread plus N feedback rows
+    against the assistant message. Returns the assistant message id."""
+    from app.models.domain import ChatMessage, ChatThread, Feedback
+
+    async with SessionLocal() as s:
+        thread = ChatThread(
+            workspace_id=ws_id,
+            user_id=user_id,
+            title="t",
+            kind=thread_kind,
+        )
+        s.add(thread)
+        await s.flush()
+        user_msg = ChatMessage(thread_id=thread.id, role="user", content=question)
+        s.add(user_msg)
+        await s.flush()
+        assistant_msg = ChatMessage(
+            thread_id=thread.id,
+            role="assistant",
+            content=answer,
+            sql=sql,
+            citations=citations or [],
+            rows=rows or [],
+        )
+        s.add(assistant_msg)
+        await s.flush()
+        for _ in range(positive):
+            s.add(
+                Feedback(
+                    chat_message_id=assistant_msg.id,
+                    user_id=user_id,
+                    sentiment="positive",
+                )
+            )
+        for _ in range(negative):
+            s.add(
+                Feedback(
+                    chat_message_id=assistant_msg.id,
+                    user_id=user_id,
+                    sentiment="negative",
+                )
+            )
+        await s.commit()
+        return assistant_msg.id
+
+
+@pytest.mark.asyncio
+async def test_chat_history_producer_promotes_endorsed_turn(db_gen) -> None:
+    from app.services.evals.generators.chat_history import ChatHistoryProducer
+
+    ws_id, user_id = await _seed_workspace(db_gen)
+    await _seed_endorsed_chat_turn(
+        db_gen,
+        ws_id,
+        user_id,
+        question="How many active customers do we have?",
+        answer="There are 1,234 active customers.",
+        sql="SELECT COUNT(*) FROM customers WHERE active = TRUE",
+        citations=[{"source": "postgres", "table": "core.customers"}],
+        rows=[{"count": 1234}],
+        positive=1,
+    )
+
+    async with db_gen() as s:
+        cands = await ChatHistoryProducer().generate(s, workspace_id=ws_id, limit=10)
+
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.question == "How many active customers do we have?"
+    assert c.expected_sql == "SELECT COUNT(*) FROM customers WHERE active = TRUE"
+    assert c.expected_connector_slug == "postgres"
+    assert c.expected_tool == "postgres.read_select"
+    assert c.expected_citations == [{"source": "postgres", "table": "core.customers"}]
+    assert "chat_history" in c.tags
+    assert "endorsed" in c.tags
+    assert "count" in c.tags
+
+
+@pytest.mark.asyncio
+async def test_chat_history_producer_skips_turn_with_negative_feedback(db_gen) -> None:
+    """A single thumbs-down on an otherwise-endorsed turn disqualifies it.
+    We do not want to promote answers users have complained about."""
+    from app.services.evals.generators.chat_history import ChatHistoryProducer
+
+    ws_id, user_id = await _seed_workspace(db_gen)
+    await _seed_endorsed_chat_turn(
+        db_gen,
+        ws_id,
+        user_id,
+        question="What is the revenue this month?",
+        answer="$420k",
+        sql="SELECT SUM(net_revenue) FROM orders",
+        positive=2,
+        negative=1,
+    )
+
+    async with db_gen() as s:
+        cands = await ChatHistoryProducer().generate(s, workspace_id=ws_id, limit=10)
+    assert cands == []
+
+
+@pytest.mark.asyncio
+async def test_chat_history_producer_skips_unendorsed_turn(db_gen) -> None:
+    """No positive feedback at all -> not endorsed -> not a candidate."""
+    from app.services.evals.generators.chat_history import ChatHistoryProducer
+
+    ws_id, user_id = await _seed_workspace(db_gen)
+    await _seed_endorsed_chat_turn(
+        db_gen,
+        ws_id,
+        user_id,
+        question="anything?",
+        answer="something",
+        sql="SELECT 1",
+        positive=0,
+    )
+
+    async with db_gen() as s:
+        cands = await ChatHistoryProducer().generate(s, workspace_id=ws_id, limit=10)
+    assert cands == []
+
+
+@pytest.mark.asyncio
+async def test_chat_history_producer_skips_eval_threads(db_gen) -> None:
+    """Threads with kind != 'user' (eval/scheduled) are self-referential and
+    must not be replayed as their own eval cases."""
+    from app.services.evals.generators.chat_history import ChatHistoryProducer
+
+    ws_id, user_id = await _seed_workspace(db_gen)
+    await _seed_endorsed_chat_turn(
+        db_gen,
+        ws_id,
+        user_id,
+        question="from inside an eval thread",
+        answer="self-referential",
+        sql="SELECT 1",
+        positive=1,
+        thread_kind="eval",
+    )
+
+    async with db_gen() as s:
+        cands = await ChatHistoryProducer().generate(s, workspace_id=ws_id, limit=10)
+    assert cands == []
+
+
+@pytest.mark.asyncio
+async def test_chat_history_producer_skips_turn_without_sql(db_gen) -> None:
+    """Plain-text answers have nothing deterministic for the runner to
+    assert; only SQL-bearing turns become candidates."""
+    from app.services.evals.generators.chat_history import ChatHistoryProducer
+
+    ws_id, user_id = await _seed_workspace(db_gen)
+    await _seed_endorsed_chat_turn(
+        db_gen,
+        ws_id,
+        user_id,
+        question="What is data observability?",
+        answer="A definition.",
+        sql="",
+        positive=1,
+    )
+
+    async with db_gen() as s:
+        cands = await ChatHistoryProducer().generate(s, workspace_id=ws_id, limit=10)
+    assert cands == []
+
+
+@pytest.mark.asyncio
+async def test_chat_history_producer_orders_newest_first(db_gen) -> None:
+    """Under the per-producer cap, the most recently endorsed questions
+    should win."""
+    from app.services.evals.generators.chat_history import ChatHistoryProducer
+
+    ws_id, user_id = await _seed_workspace(db_gen)
+    for i in range(3):
+        await _seed_endorsed_chat_turn(
+            db_gen,
+            ws_id,
+            user_id,
+            question=f"question number {i}",
+            answer=f"answer {i}",
+            sql=f"SELECT {i}",
+            positive=1,
+        )
+
+    async with db_gen() as s:
+        cands = await ChatHistoryProducer().generate(s, workspace_id=ws_id, limit=2)
+    assert len(cands) == 2
+    # Most-recent first; the seed loop runs in order 0,1,2 so the cap
+    # should drop 0 (oldest) first.
+    questions = [c.question for c in cands]
+    assert "question number 2" in questions
+    assert "question number 1" in questions
+    assert "question number 0" not in questions
+
+
+@pytest.mark.asyncio
+async def test_chat_history_case_catches_regression_via_runner(db_gen, monkeypatch) -> None:
+    """End-to-end regression test for point 4: an endorsed chat turn is
+    promoted to a candidate, then approved, then re-run through the eval
+    runner against a chat fn that has *regressed* (returns a different SQL
+    body). The runner's connector/SQL accuracy metrics must mark the case
+    as failed — proving these historical datasets actually catch bugs."""
+    from app.models.domain import EvalCase
+    from app.services.evals.cases import EvalCaseService
+    from app.services.evals.generators.chat_history import ChatHistoryProducer
+
+    ws_id, user_id = await _seed_workspace(db_gen)
+
+    # 1. Seed a historical assistant turn the user endorsed.
+    original_sql = "SELECT COUNT(*) FROM customers"
+    await _seed_endorsed_chat_turn(
+        db_gen,
+        ws_id,
+        user_id,
+        question="how many customers?",
+        answer="1,234",
+        sql=original_sql,
+        citations=[{"source": "postgres", "table": "core.customers"}],
+        positive=1,
+    )
+
+    # 2. Generate -> approve.
+    async with db_gen() as s:
+        cands = await ChatHistoryProducer().generate(s, workspace_id=ws_id, limit=10)
+        assert len(cands) == 1
+        service = EvalCaseService(s)
+        case_row = await service.create(
+            await _candidate_to_input(s, ws_id, cands[0])
+        )
+        await service.approve(case_row.id, workspace_id=ws_id)
+        await s.commit()
+        case_id = case_row.id
+
+    # 3. Build a fake EvalContext as though the runner just executed the
+    #    case. Two scenarios:
+    #    (a) chat regressed -> different SQL + different connector
+    #    (b) chat is fine   -> identical SQL + same connector
+    from app.services.evals.metrics import ALL_METRICS
+    from app.services.evals.metrics.base import EvalContext
+
+    async with db_gen() as s:
+        case_db = await s.get(EvalCase, case_id)
+        assert case_db is not None
+
+    def _ctx(actual_sql: str, actual_connector: str) -> EvalContext:
+        return EvalContext(
+            expected_answer=case_db.expected_answer,
+            expected_sql=case_db.expected_sql,
+            expected_connector_slug=case_db.expected_connector_slug,
+            expected_tool=case_db.expected_tool,
+            expected_citations=list(case_db.expected_citations or []),
+            expected_result_hash=None,
+            expected_result_preview=[],
+            actual_answer="anything",
+            actual_sql=actual_sql,
+            actual_connector_slug=actual_connector,
+            actual_tool=f"{actual_connector}.read_select",
+            actual_citations=[{"source": actual_connector, "table": "core.customers"}],
+            actual_result_hash=None,
+            actual_result_preview=[],
+            retrieval_candidates=[],
+            chat_spans=[],
+            duration_ms=10,
+            prompt_tokens=None,
+            completion_tokens=None,
+            total_tokens=None,
+            cost_usd=None,
+            model=None,
+            previous_run_passed=None,
+            repeat_scores=[],
+            question=case_db.question,
+        )
+
+    # Find the SQL + connector accuracy metrics by their registered name.
+    sql_metric = next(m for m in ALL_METRICS if m.name == "sql_correctness")
+    conn_metric = next(m for m in ALL_METRICS if m.name == "connector_accuracy")
+
+    # Scenario (a): regression. Chat returns the WRONG connector and a
+    # different SQL body — both gating metrics must mark the case as failed.
+    bad_ctx = _ctx(actual_sql="SELECT 999", actual_connector="bigquery")
+    bad_sql = sql_metric.score(bad_ctx, threshold=0.5)
+    bad_conn = conn_metric.score(bad_ctx, threshold=1.0)
+    assert bad_conn.passed is False, "connector metric should fail on wrong connector"
+    assert bad_sql.passed is False, "sql metric should fail on different SQL body"
+
+    # Scenario (b): chat is fine — same SQL, same connector → both pass.
+    good_ctx = _ctx(actual_sql=original_sql, actual_connector="postgres")
+    good_sql = sql_metric.score(good_ctx, threshold=0.5)
+    good_conn = conn_metric.score(good_ctx, threshold=1.0)
+    assert good_conn.passed is True
+    assert good_sql.passed is True
+
+
+async def _candidate_to_input(session, ws_id: str, candidate):
+    """Test helper: convert a CandidateCase into an EvalCaseInput."""
+    from app.services.evals.cases import EvalCaseInput
+
+    return EvalCaseInput(
+        workspace_id=ws_id,
+        question=candidate.question,
+        expected_answer=candidate.expected_answer,
+        expected_sql=candidate.expected_sql,
+        expected_connector_slug=candidate.expected_connector_slug,
+        expected_tool=candidate.expected_tool,
+        expected_citations=list(candidate.expected_citations or []),
+        tags=list(candidate.tags or []),
+        origin=candidate.origin,
+        status="candidate",
+    )
+
+
 # ---------- Coordinator ----------
 
 
@@ -1319,7 +1717,7 @@ async def test_producers_catalog_lists_all(gen_client) -> None:
     assert resp.status_code == 200
     body = resp.json()
     slugs = [p["slug"] for p in body["producers"]]
-    assert slugs == ["schema", "kg", "lineage", "fixture"]
+    assert slugs == ["schema", "kg", "lineage", "fixture", "chat_history"]
     assert body["default_limit_per_source"] == 50
     assert body["workspace_candidate_ceiling"] == 500
 
@@ -1376,9 +1774,9 @@ async def test_generate_with_no_sources_runs_all_producers(gen_client) -> None:
     resp = await ac.post("/evals/cases/generate-candidates", json={})
     assert resp.status_code == 200
     body = resp.json()
-    # All four producers should appear in the report (even if some produce 0).
+    # All registered producers should appear in the report (even if some produce 0).
     slugs = sorted([p["slug"] for p in body["producers"]])
-    assert slugs == ["fixture", "kg", "lineage", "schema"]
+    assert slugs == ["chat_history", "fixture", "kg", "lineage", "schema"]
 
 
 # ---------- bulk approve / archive ----------

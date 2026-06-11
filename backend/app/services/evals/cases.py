@@ -46,6 +46,7 @@ CASE_ORIGINS = (
     "auto:airflow",
     "auto:dagster",
     "auto:fixture",
+    "auto:chat_history",
 )
 
 
