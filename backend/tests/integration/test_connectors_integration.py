@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from app.services.connectors.adapters import adapter_for
+from app.services.connectors.catalog import CATALOG_BY_SLUG
 
 ROOT = Path(__file__).resolve().parents[3]
 COMPOSE_FILE = ROOT / "tests" / "integration" / "docker-compose.yml"
@@ -198,7 +199,6 @@ async def test_local_docker_connector_test_and_sync(
 SAAS_CONNECTORS: dict[str, dict[str, str]] = {
     "notion": {
         "integration_token": "NOTION_INTEGRATION_TOKEN",
-        "database_ids": "NOTION_DATABASE_IDS",
     },
     "google_docs": {"service_account_json": "GOOGLE_DOCS_SERVICE_ACCOUNT_JSON"},
     "quip": {"access_token": "QUIP_ACCESS_TOKEN"},
@@ -244,7 +244,12 @@ async def test_saas_connector_test_and_sync(integration_env: None, slug: str, en
         pytest.skip("Set RUN_SAAS_CONNECTOR_INTEGRATION=1 to run live SaaS connector tests.")
 
     credentials = {field: os.getenv(env_name, "") for field, env_name in env_map.items()}
-    missing = [env_name for env_name in env_map.values() if not os.getenv(env_name)]
+    optional_fields = {f.name for f in CATALOG_BY_SLUG[slug].credential_schema if not f.required}
+    missing = [
+        env_name
+        for field, env_name in env_map.items()
+        if field not in optional_fields and not os.getenv(env_name)
+    ]
     if missing:
         pytest.skip(f"Missing SaaS credentials for {slug}: {', '.join(missing)}")
 

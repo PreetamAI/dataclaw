@@ -49,7 +49,7 @@ async def test_notion_test_uses_users_me() -> None:
         return_value=httpx.Response(200, json={"object": "user"})
     )
     result = await adapter_for("notion").test(
-        {"integration_token": "secret_xyz", "database_ids": ""}
+        {"integration_token": "secret_xyz"}
     )
     assert result.status == "ok"
     assert route.calls.last.request.headers["Notion-Version"] == "2022-06-28"
@@ -62,7 +62,7 @@ async def test_notion_sync_calls_search_with_page_size() -> None:
         return_value=httpx.Response(200, json={"results": [{"id": "p1", "object": "page"}]})
     )
     result = await adapter_for("notion").sync(
-        {"integration_token": "secret_xyz", "database_ids": ""}
+        {"integration_token": "secret_xyz"}
     )
     assert result["mode"] == "real"
     assert result["objects_synced"] == 1

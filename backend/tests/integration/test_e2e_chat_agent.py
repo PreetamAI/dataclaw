@@ -183,7 +183,6 @@ async def test_e2e_chat_agent_sqlite_chroma_chart_and_approval(monkeypatch, tmp_
             notion_credentials = {
                 "base_url": "http://localhost:18084",
                 "integration_token": "notion-token",
-                "database_ids": "",
             }
             notion_test = await ac.post("/connectors/notion/test", json={"credentials": notion_credentials})
             assert notion_test.status_code == 200

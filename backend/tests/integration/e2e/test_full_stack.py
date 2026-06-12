@@ -468,7 +468,6 @@ CONNECTOR_CREDENTIALS = {
     "notion": {
         "base_url": "http://localhost:18084",
         "integration_token": "notion-token",
-        "database_ids": "",
     },
 }
 

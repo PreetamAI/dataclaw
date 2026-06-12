@@ -95,7 +95,7 @@ def catalog() -> list[ConnectorDefinition]:
             category=ConnectorCategory.KNOWLEDGE,
             logo_key="notion",
             docs_url="https://developers.notion.com/",
-            credential_schema=[token_field("integration_token"), CredentialField(name="database_ids", label="Database IDs", secret=False, required=False)],
+            credential_schema=[token_field("integration_token")],
             local_verification=VerificationMode.CREDENTIAL_REQUIRED,
             sync_behavior="Sync pages, databases, titles, rich text, and table mentions into Chroma-backed knowledge snippets.",
             production_notes="Requires a Notion integration token and shared pages/databases.",
