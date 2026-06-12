@@ -1,22 +1,31 @@
-import asyncio
-import logging
-import signal
-from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+# Merge ~/.dataclaw/.env into os.environ BEFORE any module imports `get_settings()`.
+# `app.db.session` calls it at module-load time and caches the result via lru_cache,
+# so this must run before the `from app...` imports below pull that module in —
+# otherwise the worker runs with the default MASTER_KEY and cannot decrypt any
+# secret the API wrote with the real key. Existing process env still wins via setdefault().
+from app.core.config import load_env_file  # noqa: E402
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+load_env_file()
 
-from app.db.session import get_session
-from app.models.domain import AgentRun, WorkerHeartbeat, Workspace
-from app.services.agents.background_runner import run_due_background_agents
-from app.services.agents.docs_agent import run_docs_agent
-from app.services.agents.lineage_agent import run_lineage_agent
-from app.services.agents.metadata_agent import run_metadata_agent
-from app.services.evals.runner import run_batch as run_eval_batch
-from app.services.knowledge_compile.service import CompileService
-from app.services.settings_store import get_eval_config
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+import signal  # noqa: E402
+from collections.abc import Awaitable, Callable  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
+
+from app.db.session import get_session  # noqa: E402
+from app.models.domain import AgentRun, WorkerHeartbeat, Workspace  # noqa: E402
+from app.services.agents.background_runner import run_due_background_agents  # noqa: E402
+from app.services.agents.docs_agent import run_docs_agent  # noqa: E402
+from app.services.agents.lineage_agent import run_lineage_agent  # noqa: E402
+from app.services.agents.metadata_agent import run_metadata_agent  # noqa: E402
+from app.services.evals.runner import run_batch as run_eval_batch  # noqa: E402
+from app.services.knowledge_compile.service import CompileService  # noqa: E402
+from app.services.settings_store import get_eval_config  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("dataclaw.worker")
