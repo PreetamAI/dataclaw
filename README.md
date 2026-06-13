@@ -33,6 +33,7 @@ DataClaw is a self-hosted, AI-native data platform. Connect your warehouses, pip
 - **Local LLM via Ollama** - same UX, your hardware, zero per-token cost. Default models: `llama3.1:8b` chat + `nomic-embed-text` embeddings. Swap to OpenAI or any OpenAI-compatible endpoint with one config change.
 - **Knowledge graph** compiled from your wiki + warehouse metadata + DAG state + lineage. Agents cite back to it instead of hallucinating.
 - **Write safety + audit** - destructive SQL creates approval-required alerts; every executed write logged in `agent_write_audit`.
+- **Evals + golden queries** - measure answer quality, capture canonical SQL, and turn 👍'd chat answers into regression cases. Deterministic metrics work out of the box; optional LLM-judge metrics via the `[evals]` extra.
 - **Self-hosted, open-source** - runs on your laptop, your VPS, or your VPC. No data leaves your network.
 
 ## 🎥 Demo
@@ -179,6 +180,25 @@ Two kinds, both behind explicit MCP grants:
 
 Manage everything in the **Agents** tab. The API exposes `GET /agents?kind=…`, `POST /agents`, `PATCH /agents/{id}`, `GET/PUT /agents/{id}/grants`.
 
+## Evals
+
+Measure whether the agent is actually answering correctly, and let good answers compound.
+
+- **Golden queries** - mark a question's SQL as canonical. The chat agent prefers it over generating fresh SQL. Lifecycle: `candidate → approved → golden` (promotion to `golden` is always an explicit human step).
+- **Eval cases from your workspace** - producers auto-generate candidates from schemas, the knowledge graph, lineage, demo fixtures, and **endorsed chat history** (a 👍'd answer with SQL and no 👎 becomes a regression case).
+- **Metrics** - deterministic graders (SQL correctness, result accuracy, citations, connector/tool routing, cost/latency) run on the base install. Optional **LLM-judge** metrics (faithfulness, answer relevancy, safety) run when the `[evals]` extra is installed and any LLM provider is configured - including local Ollama.
+- **Suggestions** - a failing run can propose a golden query, a prompt tweak, or a workspace rule; applying one is human-reviewed.
+
+Install the optional extra for LLM-judge metrics and the optional Langfuse trace sink:
+
+```bash
+pipx install 'dataclaw-platform[evals]'
+```
+
+The `[evals]` extra is **not** required to use evals - the deterministic metrics work without it. It is also **not** a Langfuse account: Langfuse is an optional, off-by-default trace sink you configure only if you want to forward agent traces to Langfuse (cloud or self-hosted). See `docs/RELEASE_NOTES_v0.2.0.md` and [getdataclaw.xyz/docs/evals](https://getdataclaw.xyz/docs/evals).
+
+Manage everything in the **Evals** tab. The API is mounted under `/evals` (cases, runs, suggestions, config).
+
 ## MCP, approval, and audit
 
 Every connector slug has a mounted MCP endpoint under `/mcp/{slug}` plus a REST-compatible tool endpoint at `/mcp/{slug}/tools/{tool_name}`. Tool names are scoped by prefix:
@@ -258,7 +278,7 @@ dataclaw/
 │   │   │   └── sync_materializer.py
 │   │   ├── worker/                # single-loop background dispatcher
 │   │   └── main.py
-│   ├── alembic/versions/          # 0001–0012 (0012 = unified agents)
+│   ├── alembic/versions/          # 0001–0023 (0012 = unified agents, 0020–0023 = evals)
 │   └── tests/                     # unit + contract + integration
 ├── frontend/                      # React + RTK Query
 │   └── src/

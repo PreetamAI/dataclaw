@@ -2,6 +2,30 @@
 
 All notable changes to DataClaw are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.2.0 - evals & the self-improving loop
+
+The evals layer. DataClaw can now measure its own answer quality, capture golden queries, and turn user feedback into regression cases.
+
+### Added
+
+- **Eval cases & golden queries.** Curate question → expected-SQL/answer pairs with a `candidate → approved → golden` lifecycle. Golden cases short-circuit the chat agent to the canonical SQL instead of regenerating it. Promotion to `golden` always requires an explicit human step.
+- **Auto-generated eval candidates.** Producers turn workspace state into candidate cases - from schemas, the knowledge graph, lineage, demo fixtures, and **endorsed chat history** (a 👍'd answer with SQL and no 👎 becomes a regression case).
+- **Metrics.** Deterministic graders (SQL correctness, result accuracy, citations, connector/tool routing, cost/latency) plus optional **LLM-judge** metrics (faithfulness, answer relevancy, safety) via Ragas.
+- **Suggestions.** A failing run can propose a golden query, a prompt tweak, or a workspace rule; applying one is human-reviewed.
+- **Schema-drift invalidation.** When a connector sync changes a table, golden cases that reference it are demoted (not deleted) and tagged for review.
+- **Optional `[evals]` extra.** `pipx install 'dataclaw-platform[evals]'` adds the Ragas LLM-judge metrics and the optional Langfuse trace sink. Without it the core evals layer still works; judge metrics return `skipped`.
+- **Optional Langfuse sink.** Per-workspace, off by default. Forwards agent traces to Langfuse (cloud or self-hosted) when configured; a clean no-op otherwise. DataClaw's own database remains the system of record.
+- **👍/👎 chat feedback** captured per message and surfaced to the eval producers.
+
+### Notes
+
+- Result-accuracy (exact result-set hash) is **informational, not gating**: it is only reliable on frozen fixture data, since live warehouse rows legitimately change between runs. Gating on it returns with side-by-side execution in a later release.
+- The evals API is workspace-authenticated; per-workspace isolation (IDOR hardening) and a default cost ceiling for scheduled judge batches are tracked for the multi-user/VPC release.
+
+## 0.1.1 - packaging & connector polish
+
+Patch release following the initial OSS launch: connector credential-handling fixes (Notion token-only test creds), background-agent resilience (Chroma staleness handling, unreachable-Airflow tolerance, worker tick interval), and demo-seed realism. No schema or API breaking changes.
+
 ## 0.1.0 - initial release
 
 The first public DataClaw release. A single `pipx install dataclaw-platform && dataclaw init && dataclaw start` brings up the full product runtime: API, bundled UI, in-process worker, embedded persistent Chroma, and a seeded SQLite app DB. Docker Compose remains the path for multi-container deployments.
