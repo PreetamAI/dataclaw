@@ -1990,6 +1990,43 @@ def test_result_accuracy_mismatch() -> None:
     assert s.passed is False
 
 
+def test_result_accuracy_is_informational_not_gating() -> None:
+    # Exact result-hash is only trustworthy on frozen fixtures; against live
+    # data the rows legitimately change. It reports a score but must NOT gate
+    # a run, otherwise it pumps false failures into the learning loop.
+    from app.services.evals.metrics.result_accuracy import ResultAccuracy
+
+    assert ResultAccuracy().gates_pass is False
+
+
+def test_hash_rows_stable_across_decimal_scale_and_datetime_precision() -> None:
+    # The same logical value with a different Decimal scale or datetime
+    # microsecond precision (driver-dependent) must hash identically.
+    import datetime
+    import decimal
+
+    from app.services.evals.runner import _hash_rows
+
+    a = [{"rev": decimal.Decimal("1234.50"), "ts": datetime.datetime(2026, 6, 13, 10, 0, 0)}]
+    b = [{"rev": decimal.Decimal("1234.5"), "ts": datetime.datetime(2026, 6, 13, 10, 0, 0, 0)}]
+    assert _hash_rows(a) == _hash_rows(b)
+    # A genuinely different value must still produce a different hash.
+    c = [{"rev": decimal.Decimal("1234.51"), "ts": datetime.datetime(2026, 6, 13, 10, 0, 0)}]
+    assert _hash_rows(a) != _hash_rows(c)
+
+
+def test_errored_gating_metric_fails_run_not_passes() -> None:
+    # A gating metric that crashed (status=error) must fail the run — distinct
+    # from `skipped` (expected field absent), which does not gate.
+    from app.services.evals.runner import _GatingOutcome, _derive_pass_and_category
+
+    errored = [("sql_correctness", _GatingOutcome("error", 0.0, False))]
+    assert _derive_pass_and_category(errored, None) == (False, "metric_error")
+    # skipped-only still passes
+    skipped = [("result_accuracy", _GatingOutcome("skipped", 0.0, False))]
+    assert _derive_pass_and_category(skipped, None) == (True, None)
+
+
 # ---------- connector + tool ----------
 
 
@@ -2573,7 +2610,7 @@ async def test_diagnose_404_on_unknown_run(db_sugg) -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_golden_query_creates_and_promotes_eval_case(db_sugg) -> None:
+async def test_apply_golden_query_creates_approved_eval_case(db_sugg) -> None:
     from app.models.domain import EvalCase, User
     from app.services.evals.diagnose import DiagnoseService
     from app.services.evals.suggestions import SuggestionService
@@ -2588,10 +2625,14 @@ async def test_apply_golden_query_creates_and_promotes_eval_case(db_sugg) -> Non
         applied = await SuggestionService(s).apply(golden.id, user=u)
         assert applied.status == "applied"
         assert applied.apply_result["status"] == "ok"
+        assert applied.apply_result["promoted_to_golden"] is False
         created_case_id = applied.apply_result["created_eval_case_id"]
         new_case = await s.get(EvalCase, created_case_id)
     assert new_case is not None
-    assert new_case.status == "golden"
+    # Applying a golden_query suggestion lands the case at `approved`, NOT
+    # `golden`: an LLM-authored suggestion must not self-activate in the chat
+    # golden short-circuit without an explicit human promote-to-golden.
+    assert new_case.status == "approved"
     assert new_case.expected_sql == "SELECT count(*) FROM users"
 
 
@@ -3096,10 +3137,12 @@ async def test_apply_golden_query_via_api_creates_new_case(sugg_client) -> None:
     body = apply.json()
     assert body["status"] == "applied"
     new_case_id = body["apply_result"]["created_eval_case_id"]
-    # Newly created case must be golden.
+    assert body["apply_result"]["promoted_to_golden"] is False
+    # Newly created case must be `approved`, not `golden` — promotion to golden
+    # is a separate, explicit human step.
     case = await ac.get(f"/evals/cases/{new_case_id}")
     assert case.status_code == 200
-    assert case.json()["status"] == "golden"
+    assert case.json()["status"] == "approved"
 
 
 @pytest.mark.asyncio

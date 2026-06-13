@@ -20,12 +20,13 @@ row inside the same eval thread.
 from __future__ import annotations
 
 import asyncio
+import decimal
 import hashlib
 import json
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -662,6 +663,25 @@ async def _previous_run_passed(session: AsyncSession, case_id: str) -> bool | No
     return prev.passed if prev is not None else None
 
 
+def _hash_default(value: Any) -> Any:
+    # Normalize values whose str() representation varies across DB drivers /
+    # runs for the SAME logical value, so the row hash is stable. Without this,
+    # Decimal('1.10') vs Decimal('1.1') (same number, different scale) or a
+    # datetime with/without microseconds would hash differently and make every
+    # result-accuracy comparison flaky on identical data.
+    if isinstance(value, decimal.Decimal):
+        # normalize() collapses trailing-zero scale; format 'f' avoids
+        # exponent notation (Decimal('100').normalize() -> 1E+2).
+        return format(value.normalize(), "f")
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, (bytes, bytearray)):
+        return value.hex()
+    return str(value)
+
+
 def _hash_rows(rows: list[dict]) -> str | None:
     if not rows:
         return None
@@ -669,7 +689,7 @@ def _hash_rows(rows: list[dict]) -> str | None:
     # order-insensitive (the LLM's ORDER BY may not be deterministic).
     try:
         canonical = sorted(
-            json.dumps(row, sort_keys=True, default=str) for row in rows
+            json.dumps(row, sort_keys=True, default=_hash_default) for row in rows
         )
     except Exception:
         return None
@@ -718,6 +738,11 @@ def _derive_pass_and_category(
     ctx: EvalContext,
 ) -> tuple[bool, str | None]:
     by_name = {name: outcome for name, outcome in gating_results}
+    # A gating metric that ERRORED (tried to run and crashed) must fail the
+    # run — never silently pass. This is distinct from `skipped` (the metric's
+    # expected field was simply absent), which correctly does not gate.
+    if any(o.status == "error" for o in by_name.values()):
+        return False, "metric_error"
     # If everything that scored is passing (skipped doesn't gate), the run passes.
     gating = [o for o in by_name.values() if o.status == "ok"]
     if not gating:

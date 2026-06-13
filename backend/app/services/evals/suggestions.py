@@ -317,13 +317,16 @@ class SuggestionService:
             ),
             created_by=user,
         )
+        # Land at `approved`, NOT `golden`. A suggestion may be LLM-authored;
+        # promoting straight to golden would make its SQL active in the chat
+        # golden short-circuit with no human review. The case is queued for an
+        # explicit human promote-to-golden via the dedicated endpoint.
         await service.approve(new_case.id, workspace_id=row.workspace_id)
-        promoted = await service.promote_golden(new_case.id, workspace_id=row.workspace_id)
         return {
-            "created_eval_case_id": promoted.id,
-            "promoted_to_golden": True,
+            "created_eval_case_id": new_case.id,
+            "promoted_to_golden": False,
             # Revert metadata: which case to archive on revert.
-            "revert_payload": {"created_eval_case_id": promoted.id},
+            "revert_payload": {"created_eval_case_id": new_case.id},
         }
 
     async def _apply_prompt_diff(

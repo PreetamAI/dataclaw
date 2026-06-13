@@ -4,6 +4,14 @@ Compares ``actual_result_hash`` against ``expected_result_hash`` (cached
 on promote-golden per the locked decisions). If either is missing, this
 metric is skipped — the runner records ``status=skipped`` instead of
 falsely-passing or falsely-failing.
+
+INFORMATIONAL ONLY (``gates_pass = False``): an exact result-set hash is
+only trustworthy against frozen fixture data. Against a live warehouse the
+rows legitimately change between the bless-time hash and the eval run, so a
+hash mismatch does not imply a regression. We therefore report the score but
+do NOT let it fail a run. Restoring this as a gate requires side-by-side
+execution (run golden SQL + agent SQL against the warehouse in the same
+moment and compare) — tracked for the post-merge architecture refactor.
 """
 
 from __future__ import annotations
@@ -11,7 +19,7 @@ from __future__ import annotations
 from app.services.evals.metrics.base import EvalContext, MetricScore
 
 NAME = "result_accuracy"
-GATES_PASS = True
+GATES_PASS = False
 DEFAULT_THRESHOLD = 1.0  # binary metric
 
 

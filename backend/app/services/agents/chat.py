@@ -3193,7 +3193,6 @@ ORDER BY refund_date
                     "and refund status before any Support credit. Follow-up: Finance Engineering owns "
                     "refund_alerts, payments_reconciliation, and the duplicate-payment runbook."
                 ),
-                "__approved": True,
             },
             user_email=user,
             run_id=run_id,
