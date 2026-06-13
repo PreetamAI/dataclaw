@@ -206,7 +206,7 @@ async def main() -> None:
         signum = getattr(signal, signame, None)
         if signum is not None:
             loop.add_signal_handler(signum, stop_event.set)
-    scheduler = await start_scheduler(run_initial_tick=True, background_interval_seconds=10)
+    scheduler = await start_scheduler(run_initial_tick=True, background_interval_seconds=60)
     await stop_event.wait()
     logger.info("DataClaw worker stopping.")
     scheduler.shutdown(wait=True)

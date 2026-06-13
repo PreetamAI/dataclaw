@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
+from chromadb.errors import NotFoundError
 from openai import OpenAI
 
 from app.core.config import get_settings
@@ -433,11 +434,18 @@ class VectorStore:
         batch_size = 500
         for index in range(0, len(docs), batch_size):
             batch = docs[index : index + batch_size]
-            collection.upsert(
-                ids=[item[0] for item in batch],
-                documents=[item[1] for item in batch],
-                metadatas=[item[2] for item in batch],
-            )
+            ids = [item[0] for item in batch]
+            documents = [item[1] for item in batch]
+            metadatas = [item[2] for item in batch]
+            try:
+                collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+            except NotFoundError:
+                # The server-side collection was dropped (e.g. Chroma restarted
+                # with a fresh volume) but we still hold a stale cached handle.
+                # Drop the cache entry, re-create the collection, and retry once.
+                self._collections.pop(collection_name or self._collection_name(workspace_id), None)
+                collection = self._collection_for(workspace_id, collection_name)
+                collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
 
     def ensure_embedding_model(
         self,
