@@ -105,6 +105,7 @@ from app.services.llm_catalog import catalog as llm_catalog
 from app.services.mcp_catalog import mcp_catalog
 from app.services.mcp_executor import (
     McpExecutionError,
+    _engine_kwargs_for_datastore,
     _sqlalchemy_url_for_datastore,
     _trino_execute,
     _trino_fetch,
@@ -2033,7 +2034,7 @@ async def _resolve_query_engine(
                     raise HTTPException(status_code=400, detail="Connector postgres is missing database credentials.")
             else:
                 url = _sqlalchemy_url_for_datastore(slug, credentials)
-            return create_async_engine(url, pool_pre_ping=True)
+            return create_async_engine(url, **_engine_kwargs_for_datastore(slug, credentials))
         except McpExecutionError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     if connector_slug:
@@ -2541,7 +2542,7 @@ async def approve_and_execute_alert(
         if connector is None or not connector.encrypted_credentials:
             raise HTTPException(status_code=400, detail=f"Connector {connector_slug} is not configured.")
         credentials = decrypt_json(get_settings().master_key, connector.encrypted_credentials)
-        engine = create_async_engine(_sqlalchemy_url_for_datastore(connector_slug, credentials), pool_pre_ping=True)
+        engine = create_async_engine(_sqlalchemy_url_for_datastore(connector_slug, credentials), **_engine_kwargs_for_datastore(connector_slug, credentials))
         owns_engine = True
     elif connector_slug == "sql_server":
         connector = await session.scalar(select(Connector).where(Connector.slug == connector_slug))
