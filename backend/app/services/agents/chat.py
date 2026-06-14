@@ -4122,29 +4122,42 @@ async def answer_question(
         result = _combined_tool_answer(tool_results)
         if result is not None:
             if result.get("status") != "pending_approval":
+
+                def _tool_role_messages(calls: list[Any], results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                    return [
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": json.dumps(res.get("tool_result", res), default=str)[:12000],
+                        }
+                        for call, res in zip(calls, results, strict=False)
+                    ]
+
                 followup_messages = [
                     *messages,
                     message.model_dump(exclude_none=True),
-                    *[
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": json.dumps(tool_result.get("tool_result", tool_result), default=str)[:12000],
-                        }
-                        for tool_call, tool_result in zip(message.tool_calls, tool_results, strict=False)
-                    ],
+                    *_tool_role_messages(message.tool_calls, tool_results),
                 ]
                 try:
-                    next_completion = await _traced_chat_completion(
-                        client,
-                        span_name="chat_followup",
-                        model=selected_model,
-                        messages=followup_messages,
-                        tools=openai_tools,
-                        tool_choice="auto",
-                    )
-                    next_message = next_completion.choices[0].message
-                    if next_message.tool_calls:
+                    final_answer: str | None = None
+                    # The model frequently needs more than one corrective round —
+                    # e.g. inspect the schema after a column error, then re-run the
+                    # fixed query. Keep handing it tools until it answers without a
+                    # tool call, bounded to cap cost/latency. A single round made it
+                    # synthesise an "I'll retry" promise it never got to fulfil.
+                    for _round in range(4):
+                        next_completion = await _traced_chat_completion(
+                            client,
+                            span_name="chat_followup",
+                            model=selected_model,
+                            messages=followup_messages,
+                            tools=openai_tools,
+                            tool_choice="auto",
+                        )
+                        next_message = next_completion.choices[0].message
+                        if not next_message.tool_calls:
+                            final_answer = next_message.content
+                            break
                         next_tool_results = await _run_openai_mcp_tool_calls(
                             session=session,
                             tool_engine=tool_engine,
@@ -4159,27 +4172,18 @@ async def answer_question(
                         followup_messages = [
                             *followup_messages,
                             next_message.model_dump(exclude_none=True),
-                            *[
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.id,
-                                    "content": json.dumps(tool_result.get("tool_result", tool_result), default=str)[:12000],
-                                }
-                                for tool_call, tool_result in zip(next_message.tool_calls, next_tool_results, strict=False)
-                            ],
+                            *_tool_role_messages(next_message.tool_calls, next_tool_results),
                         ]
-                        if result.get("status") != "pending_approval":
-                            final_completion = await _traced_chat_completion(
-                                client,
-                                span_name="chat_final_synthesis",
-                                model=selected_model,
-                                messages=followup_messages,
-                            )
-                            final_answer = final_completion.choices[0].message.content
-                        else:
-                            final_answer = None
+                        if result.get("status") == "pending_approval":
+                            break
                     else:
-                        final_answer = next_message.content
+                        final_completion = await _traced_chat_completion(
+                            client,
+                            span_name="chat_final_synthesis",
+                            model=selected_model,
+                            messages=followup_messages,
+                        )
+                        final_answer = final_completion.choices[0].message.content
                     if final_answer:
                         result["answer"] = _append_graph_context(final_answer, graph_context, lower)
                 except OpenAIError as exc:
