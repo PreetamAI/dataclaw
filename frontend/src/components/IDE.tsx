@@ -179,7 +179,12 @@ export function IDE({ activeThreadId, setActiveThreadId, hasKnowledgeBase, onErr
       dispatch(dataclawApi.util.invalidateTags(["ChatThreads", { type: "ChatThreads", id: response.thread_id }]));
       if (response.sql && response.message_id) {
         try {
-          const queryResult = await runQuery({ sql: response.sql, limit: 100, connector_slug: connectorSlug || undefined }).unwrap();
+          const sqlConnector =
+            (response.tool_call?.connector_slug as string | undefined) ??
+            (response.tool_calls?.find((tc) => (tc as { tool?: string })?.tool === "read_query_select")
+              ?.connector_slug as string | undefined) ??
+            connectorSlug;
+          const queryResult = await runQuery({ sql: response.sql, limit: 100, connector_slug: sqlConnector || undefined }).unwrap();
           setLiveRows((prev) => ({ ...prev, [response.message_id!]: queryResult.rows }));
         } catch (err) {
           onError(errorMessage(err));

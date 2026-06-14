@@ -2439,6 +2439,22 @@ def _notion_cursor_params(arguments: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
+def _notion_blocks_to_text(blocks: list[dict[str, Any]]) -> str:
+    # Notion stores a page's readable content in its child blocks, not in the
+    # page object (which carries only properties/title). Render the rich_text of
+    # each block to plain text so a single read_get_page returns usable content.
+    lines: list[str] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        payload = block.get(str(block.get("type")), {})
+        rich = payload.get("rich_text", []) if isinstance(payload, dict) else []
+        text = "".join(part.get("plain_text", "") for part in rich if isinstance(part, dict))
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
 async def _notion_tool(session: AsyncSession, tool_name: str, arguments: dict[str, Any], agent_id: str) -> dict[str, Any]:
     credentials = await _connector_credentials(session, "notion")
     adapter = adapter_for("notion")
@@ -2460,7 +2476,19 @@ async def _notion_tool(session: AsyncSession, tool_name: str, arguments: dict[st
                 raise McpExecutionError(400, "page_id is required.")
             response = await client.get(f"{base_url}/v1/pages/{_url_segment(page_id, field_name='page_id')}", headers=headers)
             response.raise_for_status()
-            return {"status": "ok", "page": response.json(), "agent_id": agent_id}
+            page = response.json()
+            body = ""
+            try:
+                blocks_response = await client.get(
+                    f"{base_url}/v1/blocks/{_url_segment(page_id, field_name='page_id')}/children",
+                    headers=headers,
+                    params={"page_size": 100},
+                )
+                blocks_response.raise_for_status()
+                body = _notion_blocks_to_text(blocks_response.json().get("results", []))
+            except httpx.HTTPError:
+                pass
+            return {"status": "ok", "page": page, "body": body, "agent_id": agent_id}
         if tool_name == "read_get_database":
             database_id = str(arguments.get("database_id") or arguments.get("id") or "")
             if not database_id:
