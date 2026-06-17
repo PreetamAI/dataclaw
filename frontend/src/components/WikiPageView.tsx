@@ -2,6 +2,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
+import { childText, slugify } from "../lib/toc";
 import type { WikiPage } from "../types";
 
 type WikiPageViewProps = {
@@ -14,6 +15,14 @@ function renderWikiLinks(body: string) {
     const path = target.startsWith("wiki/") ? target : `wiki/entities/${target}.md`;
     return `[${target}](wiki://${path})`;
   });
+}
+
+function stripDuplicateTitle(body: string, title: string) {
+  const match = /^\s*#\s+(.+?)\s*$/m.exec(body.slice(0, 200));
+  if (match && match.index === body.search(/\S/) && match[1].trim() === title.trim()) {
+    return body.slice(match.index + match[0].length).replace(/^\s+/, "");
+  }
+  return body;
 }
 
 export function WikiPageView({ page, onLinkClick }: WikiPageViewProps) {
@@ -54,6 +63,12 @@ export function WikiPageView({ page, onLinkClick }: WikiPageViewProps) {
           rehypePlugins={[rehypeHighlight]}
           remarkPlugins={[remarkGfm]}
           components={{
+            h2({ children }) {
+              return <h2 id={slugify(childText(children))}>{children}</h2>;
+            },
+            h3({ children }) {
+              return <h3 id={slugify(childText(children))}>{children}</h3>;
+            },
             a({ href, children }) {
               if (href?.startsWith("wiki://")) {
                 const path = href.replace("wiki://", "");
@@ -71,7 +86,7 @@ export function WikiPageView({ page, onLinkClick }: WikiPageViewProps) {
             },
           }}
         >
-          {renderWikiLinks(page.body)}
+          {renderWikiLinks(stripDuplicateTitle(page.body, page.title))}
         </ReactMarkdown>
       </div>
     </article>

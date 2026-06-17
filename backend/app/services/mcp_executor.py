@@ -704,6 +704,67 @@ def _default_schema_for_datastore(connector_slug: str, credentials: dict[str, An
     return None
 
 
+def _configured_default_schema(connector_slug: str, credentials: dict[str, Any]) -> str | None:
+    """Schema the connector was *explicitly* configured with, or None.
+
+    Unlike :func:`_default_schema_for_datastore`, this never falls back to
+    ``"public"`` — so callers can tell "the user pinned a schema" apart from
+    "nothing was configured", and resolve the table's real schema in the
+    latter case.
+    """
+    if connector_slug == "mysql":
+        return str(credentials.get("database") or "").strip() or None
+    if connector_slug == "trino":
+        return str(credentials.get("schema") or "").strip() or None
+    if connector_slug in {"postgres", "redshift"}:
+        explicit = str(credentials.get("default_schema") or "").strip()
+        if explicit:
+            return explicit.split(",")[0].strip() or None
+        return None
+    return None
+
+
+async def _resolve_table_schema(
+    engine: AsyncEngine,
+    connector_slug: str,
+    credentials: dict[str, Any],
+    table_name: str,
+    requested_schema: str | None,
+) -> str:
+    """Resolve which schema a table lives in for the SQL read tools.
+
+    Priority: an explicitly requested schema → a connector-configured default
+    → the schema the table actually lives in (looked up in
+    ``information_schema`` with no schema filter). Only when none of those
+    resolve does it fall back to ``"public"``. This is what lets the agent
+    read ``core.customers`` without the caller having to know the schema.
+    """
+    if requested_schema:
+        return requested_schema
+    configured = _configured_default_schema(connector_slug, credentials)
+    if configured:
+        return configured
+    async with engine.connect() as conn:
+        schemas = (
+            await conn.execute(
+                text(
+                    "select table_schema from information_schema.tables "
+                    "where table_name = :table "
+                    "and table_schema not in ('pg_catalog', 'information_schema') "
+                    "order by table_schema"
+                ),
+                {"table": table_name},
+            )
+        ).scalars().all()
+    if len(schemas) == 1:
+        return schemas[0]
+    if schemas:
+        # Same table name in several schemas — prefer public if present so the
+        # historical default still wins, otherwise the first alphabetically.
+        return "public" if "public" in schemas else schemas[0]
+    return "public"
+
+
 def _engine_kwargs_for_datastore(connector_slug: str, credentials: dict[str, Any]) -> dict[str, Any]:
     """Return create_async_engine kwargs derived from the connector creds.
 
@@ -4557,7 +4618,31 @@ async def _snowflake_tool(session: AsyncSession, tool_name: str, arguments: dict
         except Exception as exc:
             raise McpExecutionError(400, f"Snowflake MCP request failed: {exc}") from exc
 
-    schema = _safe_identifier(str(arguments.get("schema") or credentials.get("schema") or "PUBLIC"))
+    explicit_schema = str(arguments.get("schema") or credentials.get("schema") or "").strip()
+    schema = _safe_identifier(explicit_schema or "PUBLIC")
+
+    async def _resolve_schema(table: str) -> str:
+        """Resolve which schema a Snowflake table lives in.
+
+        Explicit/configured schema wins; otherwise look the table up in
+        ``information_schema`` rather than assuming ``PUBLIC`` — same fix as
+        the other SQL connectors.
+        """
+        if explicit_schema:
+            return schema
+        rows = await asyncio.to_thread(
+            fetch,
+            "select table_schema from information_schema.tables "
+            f"where table_name = '{table.upper()}' "
+            "and table_schema <> 'INFORMATION_SCHEMA' order by table_schema",
+        )
+        names = [str(row["TABLE_SCHEMA"]) for row in rows]
+        if len(names) == 1:
+            return _safe_identifier(names[0])
+        if names:
+            return _safe_identifier("PUBLIC" if "PUBLIC" in names else names[0])
+        return _safe_identifier("PUBLIC")
+
     if tool_name == "read_list_tables":
         rows = await asyncio.to_thread(
             fetch,
@@ -4567,6 +4652,7 @@ async def _snowflake_tool(session: AsyncSession, tool_name: str, arguments: dict
         return {"status": "ok", "tables": [{"schema": row["TABLE_SCHEMA"], "name": row["TABLE_NAME"], "table": row["TABLE_NAME"]} for row in rows], "agent_id": agent_id}
     if tool_name == "read_get_schema":
         table = _safe_identifier(str(arguments.get("table") or ""))
+        schema = await _resolve_schema(table)
         rows = await asyncio.to_thread(
             fetch,
             "select column_name, data_type, is_nullable from information_schema.columns "
@@ -4586,10 +4672,12 @@ async def _snowflake_tool(session: AsyncSession, tool_name: str, arguments: dict
         return {"status": "ok", "sql": sql, "rows": await asyncio.to_thread(fetch, sql), "agent_id": agent_id}
     if tool_name == "read_get_row_count":
         table = _safe_identifier(str(arguments.get("table") or ""))
+        schema = await _resolve_schema(table)
         rows = await asyncio.to_thread(fetch, f'select count(*) as ROW_COUNT from "{schema}"."{table}"')
         return {"status": "ok", "schema": schema, "table": table, "row_count": int(rows[0].get("ROW_COUNT", 0) if rows else 0), "agent_id": agent_id}
     if tool_name == "read_sample_rows":
         table = _safe_identifier(str(arguments.get("table") or ""))
+        schema = await _resolve_schema(table)
         limit = max(1, min(int(arguments.get("limit") or 100), 1000))
         rows = await asyncio.to_thread(fetch, f'select * from "{schema}"."{table}" limit {limit}')
         return {"status": "ok", "schema": schema, "table": table, "rows": rows, "total": len(rows), "agent_id": agent_id}
@@ -4616,6 +4704,7 @@ async def _snowflake_tool(session: AsyncSession, tool_name: str, arguments: dict
         }
     if tool_name == "read_get_column_stats":
         table = _safe_identifier(str(arguments.get("table") or ""))
+        schema = await _resolve_schema(table)
         rows = await asyncio.to_thread(
             fetch,
             "select column_name, data_type from information_schema.columns "
@@ -4645,6 +4734,7 @@ async def _snowflake_tool(session: AsyncSession, tool_name: str, arguments: dict
         return {"status": "ok", "schema": schema, "table": table, "columns": stats, "total": len(stats), "agent_id": agent_id}
     if tool_name == "read_get_table_freshness":
         table = _safe_identifier(str(arguments.get("table") or ""))
+        schema = await _resolve_schema(table)
         rows = await asyncio.to_thread(
             fetch,
             "select column_name, data_type from information_schema.columns "
@@ -4666,6 +4756,7 @@ async def _snowflake_tool(session: AsyncSession, tool_name: str, arguments: dict
         return {"status": "ok", "schema": schema, "table": table, "freshest_at": latest, "columns": freshness, "total": len(freshness), "agent_id": agent_id}
     if tool_name == "read_get_storage_size":
         table = _safe_identifier(str(arguments.get("table") or ""))
+        schema = await _resolve_schema(table)
         rows = await asyncio.to_thread(
             fetch,
             "select bytes as SIZE_BYTES from information_schema.tables "
@@ -4694,6 +4785,7 @@ async def _snowflake_tool(session: AsyncSession, tool_name: str, arguments: dict
         return {"status": "ok", "schema": schema, "tasks": rows, "total": len(rows), "agent_id": agent_id}
     if tool_name == "read_list_grants":
         table = _safe_identifier(str(arguments.get("table") or ""))
+        schema = await _resolve_schema(table)
         rows = await asyncio.to_thread(fetch, f'show grants on table "{schema}"."{table}"')
         return {"status": "ok", "schema": schema, "table": table, "grants": rows, "total": len(rows), "agent_id": agent_id}
     if tool_name in {"read_get_query_history", "read_query_history"}:
@@ -4791,7 +4883,7 @@ async def _sql_datastore_tool(
         if tool_name == "read_query_select":
             return await _sql_datastore_query_select(engine, arguments)
         if tool_name == "read_get_row_count":
-            return await _sql_datastore_row_count(engine, connector_slug, arguments)
+            return await _sql_datastore_row_count(engine, connector_slug, credentials, arguments)
         if tool_name == "read_sample_rows":
             return await _sql_datastore_sample_rows(engine, connector_slug, credentials, arguments)
         if tool_name == "read_search_columns":
@@ -4892,7 +4984,9 @@ async def _sql_datastore_get_schema(
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
     table_name = _safe_identifier(str(arguments.get("table") or ""))
-    schema = str(arguments.get("schema") or _default_schema_for_datastore(connector_slug, credentials) or "public")
+    schema = await _resolve_table_schema(
+        engine, connector_slug, credentials, table_name, str(arguments.get("schema") or "").strip() or None
+    )
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
@@ -4933,9 +5027,13 @@ async def _sql_datastore_query_select(engine: AsyncEngine, arguments: dict[str, 
     return {"status": "ok", "sql": sql, "rows": rows}
 
 
-async def _sql_datastore_row_count(engine: AsyncEngine, connector_slug: str, arguments: dict[str, Any]) -> dict[str, Any]:
+async def _sql_datastore_row_count(
+    engine: AsyncEngine, connector_slug: str, credentials: dict[str, Any], arguments: dict[str, Any]
+) -> dict[str, Any]:
     table_name = _safe_identifier(str(arguments.get("table") or ""))
-    schema = str(arguments.get("schema") or "").strip() or None
+    schema = await _resolve_table_schema(
+        engine, connector_slug, credentials, table_name, str(arguments.get("schema") or "").strip() or None
+    )
     quoted = _qualified_table(connector_slug, table_name, schema)
     async with engine.connect() as conn:
         count = await conn.scalar(text(f"select count(*) from {quoted}"))
@@ -4949,7 +5047,9 @@ async def _sql_datastore_sample_rows(
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
     table_name = _safe_identifier(str(arguments.get("table") or ""))
-    schema = str(arguments.get("schema") or _default_schema_for_datastore(connector_slug, credentials) or "").strip() or None
+    schema = await _resolve_table_schema(
+        engine, connector_slug, credentials, table_name, str(arguments.get("schema") or "").strip() or None
+    )
     limit = max(1, min(int(arguments.get("limit") or 100), 1000))
     table_ref = _qualified_table(connector_slug, table_name, schema)
     async with engine.connect() as conn:
@@ -5011,9 +5111,11 @@ async def _sql_datastore_column_stats(
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
     table_name = _safe_identifier(str(arguments.get("table") or ""))
-    schema = str(arguments.get("schema") or _default_schema_for_datastore(connector_slug, credentials) or "").strip() or None
+    schema = await _resolve_table_schema(
+        engine, connector_slug, credentials, table_name, str(arguments.get("schema") or "").strip() or None
+    )
     table_ref = _qualified_table(connector_slug, table_name, schema)
-    schema_for_lookup = schema or _default_schema_for_datastore(connector_slug, credentials) or "public"
+    schema_for_lookup = schema
     limit = max(1, min(int(arguments.get("limit") or 50), 100))
     async with engine.connect() as conn:
         columns = (
@@ -5064,9 +5166,11 @@ async def _sql_datastore_table_freshness(
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
     table_name = _safe_identifier(str(arguments.get("table") or ""))
-    schema = str(arguments.get("schema") or _default_schema_for_datastore(connector_slug, credentials) or "").strip() or None
+    schema = await _resolve_table_schema(
+        engine, connector_slug, credentials, table_name, str(arguments.get("schema") or "").strip() or None
+    )
     table_ref = _qualified_table(connector_slug, table_name, schema)
-    schema_for_lookup = schema or _default_schema_for_datastore(connector_slug, credentials) or "public"
+    schema_for_lookup = schema
     async with engine.connect() as conn:
         columns = (
             await conn.execute(
@@ -5109,8 +5213,10 @@ async def _sql_datastore_storage_size(
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
     table_name = _safe_identifier(str(arguments.get("table") or ""))
-    schema = str(arguments.get("schema") or _default_schema_for_datastore(connector_slug, credentials) or "").strip() or None
-    schema_for_lookup = schema or _default_schema_for_datastore(connector_slug, credentials) or "public"
+    schema = await _resolve_table_schema(
+        engine, connector_slug, credentials, table_name, str(arguments.get("schema") or "").strip() or None
+    )
+    schema_for_lookup = schema
     size_bytes: int | None = None
     async with engine.connect() as conn:
         if connector_slug == "mysql":

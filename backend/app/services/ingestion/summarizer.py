@@ -10,7 +10,26 @@ from typing import Any
 from openai import AsyncOpenAI
 
 logger = logging.getLogger("dataclaw.ingestion.summarizer")
-LLM_TIMEOUT_SECONDS = 5.0
+LLM_TIMEOUT_SECONDS = 25.0
+
+_FALLBACK_NOTES = {
+    "no_llm_configured": "_Summary pending — no LLM provider is configured._",
+    "llm_failed": "_Summary pending — the LLM summary timed out or errored; it will be retried on the next sync._",
+    "empty_llm_response": "_Summary pending — the LLM returned an empty summary._",
+}
+
+
+def _placeholder_body(
+    title: str, source_type: str, source_id: str, entities: list[str], reason: str | None
+) -> str:
+    """Wiki body used when no LLM summary is available.
+
+    Deliberately does *not* embed the raw artifact JSON — a clear "pending"
+    note plus the detected entities reads far better than a dumped blob.
+    """
+    note = _FALLBACK_NOTES.get(reason or "", "_Summary pending._")
+    linked = ", ".join(f"[[{entity}]]" for entity in entities[:12]) or "No entities detected."
+    return f"# {title}\n\n{note}\n\nSource: `{source_type}` / `{source_id}`.\n\nEntities: {linked}\n"
 
 
 @dataclass
@@ -101,7 +120,10 @@ async def summarize_artifact(
 
     api_key, model, base_url, _embedding_model = openai_config
     body = ""
-    if api_key:
+    fallback_reason: str | None = None
+    if not api_key:
+        fallback_reason = "no_llm_configured"
+    else:
         try:
             client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=LLM_TIMEOUT_SECONDS)
             prompt = (
@@ -127,15 +149,17 @@ async def summarize_artifact(
                 ],
             )
             body = completion.choices[0].message.content or ""
+            if not body:
+                fallback_reason = "empty_llm_response"
         except Exception as exc:
-            logger.warning(
-                "summarizer_openai_failed_falling_back_to_template",
+            fallback_reason = "llm_failed"
+            logger.error(
+                "summarizer_llm_failed",
                 extra={"_source_type": source_type, "_source_id": source_id, "_error": exc.__class__.__name__},
             )
             body = ""
     if not body:
-        linked = ", ".join(f"[[{entity}]]" for entity in entities[:12]) or "No entities detected."
-        body = f"# {title}\n\nSource: `{source_type}` / `{source_id}`.\n\nEntities: {linked}\n\n```text\n{text[:4000]}\n```"
+        body = _placeholder_body(title, source_type, source_id, entities, fallback_reason)
     return WikiPageDraft(
         workspace_id=workspace_id,
         path=f"wiki/{source_type}/{slugify(title)}.md",

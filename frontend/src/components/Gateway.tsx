@@ -78,6 +78,8 @@ export function Gateway() {
   const [state, setState] = useState("");
   const [severity, setSeverity] = useState("");
   const [search, setSearch] = useState("");
+  const [view, setView] = useState<"events" | "agents">("events");
+  const [agentFilter, setAgentFilter] = useState("");
   const [selectedEvent, setSelectedEvent] = useState<ObservabilityEvent | null>(null);
 
   const eventsQuery = useObservabilityEventsQuery(
@@ -118,6 +120,14 @@ export function Gateway() {
       if (event.severity === "critical") buckets.critical += 1;
     }
     return buckets;
+  }, [events]);
+  const agentCount = useMemo(() => {
+    const names = new Set<string>();
+    for (const event of events) {
+      if (event.kind !== "agent_run") continue;
+      names.add(event.agent_name || event.title.split(" — ")[0] || "Agent");
+    }
+    return names.size;
   }, [events]);
   const recentFailures = useMemo(() => {
     const cutoff = Date.now() - 60 * 60 * 1000;
@@ -166,13 +176,29 @@ export function Gateway() {
         </article>
       </section>
 
-      <div className="observability-grid">
-        <section className="gateway-panel events-panel">
-          <header>
-            <div>
-              <h2>Events</h2>
-              <p>Approval queue, alerts, and agent runs across the workspace.</p>
-            </div>
+      <section className="gateway-panel observability-tabs">
+        <header className="obs-tabbar">
+          <div className="seg" role="tablist" aria-label="Observability view">
+            <button
+              aria-selected={view === "events"}
+              className={view === "events" ? "on" : ""}
+              onClick={() => setView("events")}
+              role="tab"
+              type="button"
+            >
+              Events <span className="seg-count">{events.length}</span>
+            </button>
+            <button
+              aria-selected={view === "agents"}
+              className={view === "agents" ? "on" : ""}
+              onClick={() => setView("agents")}
+              role="tab"
+              type="button"
+            >
+              Agent history <span className="seg-count">{agentCount}</span>
+            </button>
+          </div>
+          {view === "events" ? (
             <label className="integration-search">
               <Search size={15} />
               <input
@@ -182,69 +208,88 @@ export function Gateway() {
                 onChange={(event) => setSearch(event.target.value)}
               />
             </label>
-          </header>
-
-          <div className="filter-strip">
-            {STATE_FILTERS.map((filter) => (
-              <button
-                aria-pressed={state === filter.key}
-                className={state === filter.key ? "active" : ""}
-                key={filter.key || "all"}
-                onClick={() => setState(filter.key)}
-                type="button"
-              >
-                {filter.label}
-              </button>
-            ))}
-            <span className="filter-divider" />
-            {SEVERITY_FILTERS.map((filter) => (
-              <button
-                aria-pressed={severity === filter.key}
-                className={severity === filter.key ? "active" : ""}
-                key={filter.key || "any"}
-                onClick={() => setSeverity(filter.key)}
-                type="button"
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-
-          {eventsQuery.isLoading ? (
-            <p className="connector-empty">Loading events…</p>
-          ) : events.length === 0 ? (
-            <p className="connector-empty">
-              No events match this filter. {state !== "" || severity !== "" || search ? "Try clearing filters." : "Configure a connector and run an agent to start the feed."}
-            </p>
           ) : (
-            <>
-              <ul className="event-list">
-                {visibleEvents.map((event) => (
-                  <EventRow
-                    key={event.id}
-                    event={event}
-                    onOpen={() => setSelectedEvent(event)}
-                  />
-                ))}
-              </ul>
-              {totalPages > 1 ? (
-                <div className="pagination">
-                  <button type="button" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={effectivePage === 0}>
-                    Previous
-                  </button>
-                  <span>
-                    Page {effectivePage + 1} of {totalPages} · {events.length} total
-                  </span>
-                  <button type="button" onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={effectivePage >= totalPages - 1}>
-                    Next
-                  </button>
-                </div>
-              ) : null}
-            </>
+            <label className="integration-search">
+              <Search size={15} />
+              <input
+                aria-label="Filter agents"
+                placeholder="Filter agents by name"
+                value={agentFilter}
+                onChange={(event) => setAgentFilter(event.target.value)}
+              />
+            </label>
           )}
-        </section>
-        <ObservabilityAgentHistory events={events} />
-      </div>
+        </header>
+
+        {view === "events" ? (
+          <>
+            <p className="obs-tab-desc">Approval queue, alerts, and agent runs across the workspace.</p>
+            <div className="filter-strip">
+              {STATE_FILTERS.map((filter) => (
+                <button
+                  aria-pressed={state === filter.key}
+                  className={state === filter.key ? (filter.key ? "active" : "active is-default") : ""}
+                  key={filter.key || "all"}
+                  onClick={() => setState(filter.key)}
+                  type="button"
+                >
+                  {filter.label}
+                </button>
+              ))}
+              <span className="filter-divider" />
+              {SEVERITY_FILTERS.map((filter) => (
+                <button
+                  aria-pressed={severity === filter.key}
+                  className={severity === filter.key ? (filter.key ? "active" : "active is-default") : ""}
+                  key={filter.key || "any"}
+                  onClick={() => setSeverity(filter.key)}
+                  type="button"
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+
+            {eventsQuery.isLoading ? (
+              <p className="connector-empty">Loading events…</p>
+            ) : events.length === 0 ? (
+              <p className="connector-empty">
+                No events match this filter. {state !== "" || severity !== "" || search ? "Try clearing filters." : "Configure a connector and run an agent to start the feed."}
+              </p>
+            ) : (
+              <>
+                <ul className="event-list">
+                  {visibleEvents.map((event) => (
+                    <EventRow
+                      key={event.id}
+                      event={event}
+                      onOpen={() => setSelectedEvent(event)}
+                    />
+                  ))}
+                </ul>
+                {totalPages > 1 ? (
+                  <div className="pagination">
+                    <button type="button" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={effectivePage === 0}>
+                      Previous
+                    </button>
+                    <span>
+                      Page {effectivePage + 1} of {totalPages} · {events.length} total
+                    </span>
+                    <button type="button" onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={effectivePage >= totalPages - 1}>
+                      Next
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="obs-tab-desc">Last runs, durations, failures, and tool-call counts by agent.</p>
+            <ObservabilityAgentHistory events={events} filter={agentFilter} />
+          </>
+        )}
+      </section>
       <EventDrawer
         event={selectedEvent}
         onClose={() => setSelectedEvent(null)}

@@ -186,7 +186,7 @@ def catalog() -> list[ConnectorDefinition]:
             category=ConnectorCategory.DATA_STORE,
             logo_key="amazon-redshift",
             docs_url="https://docs.aws.amazon.com/redshift/",
-            credential_schema=[host_field("cluster_endpoint", "Cluster endpoint"), CredentialField(name="port", label="Port", secret=False, required=False, placeholder="5439"), CredentialField(name="database", label="Database", secret=False), CredentialField(name="user", label="User", secret=False), token_field("password", "Password")],
+            credential_schema=[host_field("cluster_endpoint", "Cluster endpoint"), CredentialField(name="port", label="Port", secret=False, required=False, placeholder="5439"), CredentialField(name="database", label="Database", secret=False), CredentialField(name="user", label="User", secret=False), token_field("password", "Password"), CredentialField(name="default_schema", label="Default schema (search_path)", secret=False, required=False, placeholder="raw,core,public")],
             local_verification=VerificationMode.CREDENTIAL_REQUIRED,
             sync_behavior="Validate cluster access and sync schemas, tables, columns, and freshness hints.",
             production_notes="Use IAM auth or Secrets Manager in hardened deployments.",

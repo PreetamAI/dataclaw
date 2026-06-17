@@ -222,7 +222,8 @@ async def _ensure_connectors(session: AsyncSession, workspace: Workspace) -> Non
             )
         )
     await session.flush()
-    await _ensure_sqlite_demo_connector(session, workspace, settings)
+    if settings.demo_mode:
+        await _ensure_sqlite_demo_connector(session, workspace, settings)
 
 
 async def _ensure_sqlite_demo_connector(session: AsyncSession, workspace: Workspace, settings) -> None:

@@ -233,7 +233,8 @@ async def lifespan(app: FastAPI):
         },
     )
     _warn_if_low_ollama_memory()
-    _seed_file_backed_demo_sqlite(settings.demo_database_url)
+    if settings.demo_mode:
+        _seed_file_backed_demo_sqlite(settings.demo_database_url)
     app.state.query_engine = create_async_engine(settings.demo_database_url, pool_pre_ping=True)
     try:
         await vector_store.ping()
