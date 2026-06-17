@@ -1227,16 +1227,39 @@ class NotionAdapter(HTTPConnectorAdapter):
             "Notion-Version": "2022-06-28",
         }
 
-    async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=20) as client:
+    async def _search_all(
+        self,
+        client: httpx.AsyncClient,
+        credentials: dict[str, Any],
+        filter_: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Paginate /v1/search to completion so large workspaces aren't truncated."""
+        results: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            body: dict[str, Any] = {"page_size": 100}
+            if cursor:
+                body["start_cursor"] = cursor
+            if filter_:
+                body["filter"] = filter_
             response = await client.post(
                 f"{self.base_url(credentials)}{self.sync_path}",
                 headers=self.headers(credentials),
-                json={"page_size": 10},
+                json=body,
             )
             response.raise_for_status()
             payload = response.json()
-        results = payload.get("results", [])
+            results.extend(payload.get("results", []))
+            if not payload.get("has_more"):
+                break
+            cursor = payload.get("next_cursor")
+            if not cursor:
+                break
+        return results
+
+    async def sync(self, credentials: dict[str, Any]) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=20) as client:
+            results = await self._search_all(client, credentials)
         return {
             "mode": "real",
             "objects_synced": len(results),
@@ -1297,13 +1320,9 @@ class NotionAdapter(HTTPConnectorAdapter):
 
     async def fetch_content(self, credentials: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                f"{self.base_url(credentials)}{self.sync_path}",
-                headers=self.headers(credentials),
-                json={"page_size": 50, "filter": {"property": "object", "value": "page"}},
+            results = await self._search_all(
+                client, credentials, {"property": "object", "value": "page"}
             )
-            response.raise_for_status()
-            results = response.json().get("results", [])
             pages = []
             for page in results:
                 page_id = page.get("id")
