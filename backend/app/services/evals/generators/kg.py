@@ -93,7 +93,10 @@ class KgProducer:
                         question=f"Which dashboards or models use {table.canonical_name}?",
                         origin=self.origin,
                         expected_answer=summary,
-                        expected_connector_slug=table.connector_slug,
+                        # No expected_connector_slug: graph/lineage questions are
+                        # answered from the knowledge graph, not a connector tool,
+                        # so connector_accuracy must skip (provenance is scored via
+                        # expected_citations instead).
                         expected_citations=_node_citations([table, *(by_id[e.src_node_id] for e in uses)]),
                         tags=["kg", "usage"],
                         confidence=0.85,
@@ -111,7 +114,6 @@ class KgProducer:
                         question=f"Which DAG or model builds {table.canonical_name}?",
                         origin=self.origin,
                         expected_answer=summary,
-                        expected_connector_slug=table.connector_slug,
                         expected_citations=_node_citations([table, *(by_id[e.src_node_id] for e in builds)]),
                         tags=["kg", "build"],
                         confidence=0.85,
@@ -139,7 +141,6 @@ class KgProducer:
                         question=f"What upstream tables feed {model.canonical_name}?",
                         origin=self.origin,
                         expected_answer=summary,
-                        expected_connector_slug=model.connector_slug,
                         expected_citations=_node_citations([model, *sources]),
                         tags=["kg", "lineage"],
                         confidence=0.8,

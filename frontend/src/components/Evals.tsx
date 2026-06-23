@@ -705,11 +705,15 @@ function EvalRunRow({
         >
           {run.error ? "errored" : run.passed ? "passed" : "failed"}
         </span>
+        {run.origin ? (
+          <span className="evals-list-row-origin">{run.origin}</span>
+        ) : null}
         {run.failure_category ? (
           <span className="evals-list-row-origin">{run.failure_category}</span>
         ) : null}
       </div>
-      <div className="evals-list-row-question">
+      {run.question ? <div className="evals-list-row-question">{run.question}</div> : null}
+      <div className="evals-list-row-question evals-list-row-answer">
         {run.actual_answer?.slice(0, 140) || (run.error ? `error: ${run.error}` : "(no answer)")}
       </div>
       <div className="evals-list-row-meta">

@@ -225,29 +225,38 @@ export function Gateway() {
           <>
             <p className="obs-tab-desc">Approval queue, alerts, and agent runs across the workspace.</p>
             <div className="filter-strip">
-              {STATE_FILTERS.map((filter) => (
-                <button
-                  aria-pressed={state === filter.key}
-                  className={state === filter.key ? (filter.key ? "active" : "active is-default") : ""}
-                  key={filter.key || "all"}
-                  onClick={() => setState(filter.key)}
-                  type="button"
-                >
-                  {filter.label}
-                </button>
-              ))}
-              <span className="filter-divider" />
-              {SEVERITY_FILTERS.map((filter) => (
-                <button
-                  aria-pressed={severity === filter.key}
-                  className={severity === filter.key ? (filter.key ? "active" : "active is-default") : ""}
-                  key={filter.key || "any"}
-                  onClick={() => setSeverity(filter.key)}
-                  type="button"
-                >
-                  {filter.label}
-                </button>
-              ))}
+              <div className="filter-group">
+                <span className="filter-group-label">State</span>
+                <div className="filter-group-chips">
+                  {STATE_FILTERS.map((filter) => (
+                    <button
+                      aria-pressed={state === filter.key}
+                      className={state === filter.key ? "active" : ""}
+                      key={filter.key || "all"}
+                      onClick={() => setState(filter.key)}
+                      type="button"
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="filter-group">
+                <span className="filter-group-label">Severity</span>
+                <div className="filter-group-chips">
+                  {SEVERITY_FILTERS.map((filter) => (
+                    <button
+                      aria-pressed={severity === filter.key}
+                      className={severity === filter.key ? "active" : ""}
+                      key={filter.key || "any"}
+                      onClick={() => setSeverity(filter.key)}
+                      type="button"
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {eventsQuery.isLoading ? (

@@ -538,9 +538,14 @@ class EvalRunDTO(BaseModel):
     model: str | None
     error: str | None
     created_at: str
+    # Denormalised from the linked case so the Runs list can label each run by
+    # its source (auto:schema / auto:kg / feedback / ...) without a per-row fetch.
+    origin: str | None = None
+    question: str | None = None
+    tags: list[str] = Field(default_factory=list)
 
     @classmethod
-    def from_row(cls, row: EvalRun) -> EvalRunDTO:
+    def from_row(cls, row: EvalRun, case: EvalCase | None = None) -> EvalRunDTO:
         return cls(
             id=row.id,
             workspace_id=row.workspace_id,
@@ -562,6 +567,9 @@ class EvalRunDTO(BaseModel):
             model=row.model,
             error=row.error,
             created_at=row.created_at.isoformat(),
+            origin=case.origin if case else None,
+            question=case.question if case else None,
+            tags=list(case.tags or []) if case else [],
         )
 
 
@@ -734,7 +742,16 @@ async def list_runs(
         stmt = stmt.where(EvalRun.created_at >= cutoff)
     stmt = stmt.order_by(desc(EvalRun.created_at)).offset(offset).limit(limit)
     rows = list((await session.scalars(stmt)).all())
-    return [EvalRunDTO.from_row(r) for r in rows]
+    case_ids = {r.eval_case_id for r in rows}
+    cases: dict[str, EvalCase] = {}
+    if case_ids:
+        cases = {
+            c.id: c
+            for c in (
+                await session.scalars(select(EvalCase).where(EvalCase.id.in_(case_ids)))
+            ).all()
+        }
+    return [EvalRunDTO.from_row(r, cases.get(r.eval_case_id)) for r in rows]
 
 
 @router.get("/runs/{run_id}", response_model=EvalRunDetailDTO)
@@ -757,7 +774,7 @@ async def get_run(
         ).all()
     )
     return EvalRunDetailDTO(
-        **EvalRunDTO.from_row(run).model_dump(),
+        **EvalRunDTO.from_row(run, case).model_dump(),
         case=EvalCaseDTO.from_row(case),
         results=[
             EvalResultDTO(

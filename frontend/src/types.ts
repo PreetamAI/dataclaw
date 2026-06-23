@@ -616,6 +616,9 @@ export type EvalRun = {
   model: string | null;
   error: string | null;
   created_at: string;
+  origin: string | null;
+  question: string | null;
+  tags: string[];
 };
 
 export type EvalResult = {

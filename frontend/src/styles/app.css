@@ -1423,6 +1423,27 @@ code, kbd {
 .filter-strip {
   display: flex;
   flex-wrap: wrap;
+  gap: 12px;
+  align-items: stretch;
+}
+.filter-group {
+  display: grid;
+  gap: 7px;
+  padding: 8px 10px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+}
+.filter-group-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+.filter-group-chips {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: center;
 }
@@ -1440,19 +1461,6 @@ code, kbd {
   border-color: var(--accent);
   color: #0a0a18;
   font-weight: 700;
-}
-.filter-strip button.active.is-default {
-  background: var(--panel-2);
-  border-color: var(--line);
-  color: var(--text);
-  font-weight: 600;
-}
-.filter-strip button.active.is-default:hover { color: var(--text); }
-.filter-divider {
-  width: 1px;
-  height: 18px;
-  background: var(--line);
-  margin: 0 6px;
 }
 .event-list {
   list-style: none;

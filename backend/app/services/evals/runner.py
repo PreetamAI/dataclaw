@@ -572,15 +572,23 @@ def _build_context(
     judge_config: dict[str, Any] | None = None,
 ) -> EvalContext:
     response = response or {}
-    tool_call = response.get("tool_call") or {}
-    actual_connector_slug = (
-        tool_call.get("connector_slug")
-        if isinstance(tool_call, dict)
-        else None
+    # The real MCP path returns ``tool_calls`` (a plural list); the golden and
+    # fixture paths return a single ``tool_call``. Normalise to a list, then
+    # pick the call that best represents the answer: prefer one matching the
+    # expected connector (a multi-connector turn still counts as having used
+    # it), otherwise fall back to the first executed call.
+    tool_calls = [tc for tc in (response.get("tool_calls") or []) if isinstance(tc, dict)]
+    single = response.get("tool_call")
+    if isinstance(single, dict) and single:
+        tool_calls = [single, *tool_calls]
+    primary = next(
+        (tc for tc in tool_calls if tc.get("connector_slug") == case.expected_connector_slug),
+        tool_calls[0] if tool_calls else {},
     )
+    actual_connector_slug = primary.get("connector_slug")
     actual_tool = (
-        f"{actual_connector_slug}.{tool_call.get('tool')}"
-        if actual_connector_slug and tool_call.get("tool")
+        f"{actual_connector_slug}.{primary.get('tool')}"
+        if actual_connector_slug and primary.get("tool")
         else None
     )
 
